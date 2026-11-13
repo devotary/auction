@@ -29,7 +29,7 @@ th{position:relative}
   --negative: #ed9a86;
   --radius: 8px;
 }
-body { background: linear-gradient(#000a, #000a), url(assets/ui/dark-parchment.png) repeat; }
+body { background: #211e19 url(assets/ui/blizzard-rock.png) repeat; background-size: 256px 256px; }
 h1, h2, h3, .brand { color: #e7c77f; text-shadow: 0 1px #000; }
 .sidebar {
   background: linear-gradient(#080604b3, #080604b3), url(assets/ui/dark-parchment.png) repeat;

@@ -6,7 +6,7 @@ Character: old-world, familiar, exact. World: the original World of Warcraft auc
 
 Primary style reference: the user's explicit Classic WoW UI direction, refined toward a clean game window. Use original Blizzard button states as rounded backgrounds, dark mottled surfaces, soft gold headings and in-game item colors. Red is for primary actions and active navigation; utility buttons are quiet charcoal. No scenic banner, decorative quotes, repeated captions, diamonds, ornate repeated frames, strong shadows or flashy motion. Preserve readable data, accessible focus and touch controls.
 
-Palette: textured black background #0e0c0a, sidebar #100e0c, panel #171411, raised #2c241c, border #574635, text #eee0c7, secondary #c2b399, muted #ab9c85. Brass #e5bf76, Classic heading/button text #ffd100, original red button art, positive #8cc987, negative #ed9a86. Warcraft rarity colors carry item meaning.
+Palette: full-page Blizzard UI-Background-Rock texture, tiled at native 256×256 without a dark overlay; sidebar #100e0c, panel #171411, raised #2c241c, border #574635, text #eee0c7, secondary #c2b399, muted #ab9c85. Brass #e5bf76, Classic heading/button text #ffd100, original red button art, positive #8cc987, negative #ed9a86. Warcraft rarity colors carry item meaning. Keep data panels darker than the visibly textured page background.
 
 Typography: Georgia serif for product and section headings, system sans for controls/body, system monospace/tabular figures for market prices. H1 40px normal, H2 22px normal, body 14px, small 12px. No decorative display fonts needed.
 
