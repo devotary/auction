@@ -2,7 +2,7 @@
 
 **[Open the website →](https://devotary.github.io/auction/)**
 
-A personal World of Warcraft Auction House observatory: price history, biggest price swings, searchable items, listed supply, watchlists, and a resale calculator with configurable AH cut and expenses. Warcraft artwork, brass details, gold/silver/copper prices, responsive desktop and mobile layouts.
+A personal World of Warcraft Auction House observatory: price history, biggest price swings, searchable items, listed supply, watchlists, and a resale calculator with configurable AH cut and expenses. Classic red WoW buttons, black parchment textures, original gold dialog frames, gold/silver/copper prices, responsive desktop and mobile layouts.
 
 ## Hosting
 
