@@ -1,0 +1,8 @@
+# Asset and format sources
+
+- World of Warcraft Classic logo and landscape: Blizzard Entertainment, selected from the official [World of Warcraft homepage](https://worldofwarcraft.blizzard.com/en-us/). Personal fan project; artwork and trademarks belong to Blizzard Entertainment.
+- Warcraft item icons: Blizzard Entertainment, retrieved through [Wowhead's icon CDN](https://wow.zamimg.com/images/wow/icons/large/inv_misc_coin_01.jpg). Included icons serve locally; unbundled icons use that CDN as a fallback.
+- Item names, icon keys, categories and qualities: the public [nexus-devs/wow-classic-items dataset](https://github.com/nexus-devs/wow-classic-items/blob/master/data/json/data.json). Only metadata for items in this ledger is included, plus a small reference catalog. Custom/new items absent from it retain item IDs.
+- Design guided by [unslop by Damir Sokolovsky](https://x.com/heydamir), CC BY 4.0, and a Superdesign draft. No external UI framework, fonts, charting scripts or parser dependencies run in the site.
+- Auctionator field semantics checked against public [Database/Mixin.lua](https://github.com/JedborgWoW/Auctionator-3.3.5a/blob/main/Source/Database/Mixin.lua) and [Constants/Main.lua](https://github.com/JedborgWoW/Auctionator-3.3.5a/blob/main/Source/Constants/Main.lua). CBOR reader independently implements the relevant subset of [RFC 8949](https://www.rfc-editor.org/rfc/rfc8949).
+- Auctioneer fields checked against [CoreConst.lua](https://github.com/ckrebs95/WoW/blob/master/interface/AddOns/Auc-Advanced/CoreConst.lua) and the installed v1.4 ScanData container, read only. Decoder accepts literal tables and `return {…}` ropes, never executes Lua.

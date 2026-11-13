@@ -3,6 +3,7 @@ dist/
 .superdesign/tmp/
 test-results/
 __pycache__/
+*.tmp
 *.lua
 *.bak
 .DS_Store
