@@ -1,75 +1,51 @@
 # The Auction Ledger
 
-**[Open the website →](https://devotary.github.io/auction/)**
+**[Open the ledger](https://devotary.github.io/auction/)**
 
-A personal World of Warcraft Auction House observatory: price history, biggest price swings, searchable items, listed supply, watchlists, and a resale calculator with configurable AH cut and expenses. Rounded Classic red WoW controls, black parchment textures, restrained gold borders, gold/silver/copper prices, responsive desktop and mobile layouts.
+The Auction Ledger turns World of Warcraft Auction House scans into a compact market history. Compare minimum unit prices, price changes, listed supply, a fixed-basket market index, and possible resale spreads. These are observations from addon data, not confirmed sales.
 
-## Hosting
+## Publish a scan
 
-GitHub Pages uses **Deploy from a branch → main → / (root)**. Site files live at the root; `.nojekyll` keeps deployment buildless. Pushes update Pages automatically. The check workflow tests code without changing Pages settings.
-
-No backend, API key, package installation, or runtime JavaScript dependencies are required.
-
-## Daily updates
-
-1. Complete your scan, then `/reload` or log out so WoW writes SavedVariables.
-2. Open **Import scans** and choose `Auc-ScanData.lua` or `Auctionator.lua` from `WTF/Account/…/SavedVariables/`. Supply fallback faction and capture time where missing.
-3. Imports remain in that browser and are deduplicated. The scan library lets you remove local snapshots and export backups.
-4. To publish across devices, choose **Scan library → Export ledger JSON**, then **Publish exported scans**. Upload `scans.json` into the repo’s `data/` directory and commit. Only aggregated prices are exported. Published Pages data is public.
-
-Or import from a terminal:
+Finish your Auctioneer or Auctionator scans, then use `/reload` or log out so WoW saves its data. Launch **Auction Ledger Publisher** from the application menu, or run:
 
 ```sh
-node scripts/import-scan.mjs '/path/to/Auc-ScanData.lua'
-node scripts/import-scan.mjs '/path/to/Auctionator.lua' --faction Alliance
-git add data/scans.json
-git commit -m 'Update Auction House observations'
-git push
+cd /path/to/auction
+./publish-auctions
 ```
 
-The script reads without changing source files and atomically replaces only `data/scans.json`. It does not push automatically. File modification time is the default cache capture time; use `--timestamp` to override it. `--realm` and `--faction` fill missing CSV metadata.
+The publisher reads the addon files locally. Node.js safely decodes their saved data and merges sanitized history. Rust calculates the reports. The app pushes only generated market data through the repository deploy key. Your original addon files and credentials stay on your PC.
 
-## Supported inputs
+The site is static GitHub Pages. It needs no running server, database, port forwarding, or Tailscale. Once the push and Pages deployment finish, your PC can be off.
 
-| Input | Imported observations | Limits |
-| --- | --- | --- |
-| Auctioneer `Auc-ScanData.lua` | Unpacked images and literal Lua ropes; v1.3 nesting and v1.4 `Realm_Faction` keys | Bid-only, unseen, filtered and expired listings excluded. Valid nonempty scan required. |
-| Auctionator `Auctionator.lua` | Table records and CBOR db8/realm2; last cached minimum and modern daily low history | Cache capture time is supplied by you; per-item prices can be older. Daily lows form a separate source. |
-| JSON | Snapshot, snapshot array, or `{version:1,snapshots:[…]}` | Validated and sanitized. |
-| CSV | Download the template in Import scans | Prices are integer copper; ambiguous gold columns are rejected. |
+See [PUBLISHER.md](PUBLISHER.md) for setup, private configuration, preview mode, backups, and recovery steps.
 
-CSV aggregate columns: `itemId,name,minBuyout,quantity,listings,realm,faction,timestamp,source`. Only `itemId` and `minBuyout` are required when realm/faction/time are supplied in the dialog. Unknown quantities stay blank. `Price (copper)` and `priceCopper` alias `minBuyout`.
+## What the site shows
 
-For listing CSV rows, use `itemId,buyout,count`: whole-stack buyout in copper and stack size. They are aggregated into minimum unit buyout, weighted median unit buyout, listed units and listing count. Variant `key`, `category`, and `icon` are optional.
+The dashboard loads one market and one period at a time, including on mobile. Choose 24 hours, 7 days, 30 days, or all history. Search, filter, and sort item rows; open an item to view its price history and use the lightweight trade calculator. Watchlists stay in that browser and are not published.
 
-Limits: 64 MiB/file, 30 files/import, 100,000 item types/snapshot. A worker parses uploads. IndexedDB stores history; localStorage stores watchlists. Export regularly: clearing browser storage removes local history.
+The app prepares trend metrics before publishing. The browser draws the charts, filters and sorts report rows, and calculates only the amounts you enter in the trade calculator. The full sanitized archive downloads only when you request a library export.
 
-## Reading the ledger
+## Read prices with care
 
-- **Unit buyout:** cheapest observed stack buyout divided by stack quantity, rounded to copper.
-- **Change:** latest price vs nearest scan at/before the lookback, falling back to earliest history if shorter. Exact reference date appears below the chart.
-- **Market index:** a fixed, equal-weight basket present at both endpoints, normalized to 100 at reference. Intermediate scans missing any basket item are omitted and counted in the caption. Lines connect measured observations. It is not total market value.
-- **Listed supply:** observed buyout units. Unknown values stay unknown. Auctionator daily maximum availability is not current supply.
-- **Potential spread:** median observed minimum buyout × 95% − current minimum, per unit. Calculator exposes buy/sell prices, quantity, cut and nonrefundable costs. Neither indicates guaranteed profit or fillable depth.
-- **Daily lows:** Auctionator `l[day]`, falling back to `h[day]`; days measured from local midnight January 1, 2020. Import in the game's time zone to preserve boundaries. These are day buckets, not exact scan times.
-- **Sales/realized profit:** not claimed. Disappearing auctions could have sold, expired or been cancelled. Confirmed sales and net gold require transactions.
+- **Unit buyout** is the cheapest observed stack price divided by its stack size.
+- **Price change** compares the latest price with a reference scan at or before the selected lookback. If no scan reaches that date, the earliest available scan is used.
+- **Market index** compares a fixed, equal-weight basket of items present at both endpoints. It is normalized to 100 at the reference scan; it is not total market value.
+- **Listed supply** counts observed buyout units. Missing counts remain unknown. Auctionator daily maximum availability is not current supply.
+- **Potential spread** compares the current minimum with 95% of the observed median. It is hypothetical and does not account for fillable depth, lost deposits, or a guaranteed sale.
 
-Realm, faction and source stay separate. Auctionator cache/daily observations use separate sources to preserve measurement differences. Basic item metadata names most Classic items; unfamiliar items retain an ID/Wowhead link. Auctioneer supplies item names for new items.
+An auction that disappears might have sold, expired, or been cancelled. The Ledger cannot identify confirmed sales or realized profit from these scans.
 
-## Initial data and privacy
-
-Seeded with sanitized Auctionator data captured November 13, 2026. The first saved Auctioneer v1.4 file was incomplete with zero listings, so no Auctioneer prices or supply were fabricated. Sample data is illustrative and excluded from real exports.
-
-Seller names, character details, account identifiers, shopping lists and addon settings are excluded from the schema. Original game files remain unchanged; raw SavedVariables are not committed. See [asset/format sources](assets/ATTRIBUTION.md).
+Realm, faction, and source remain separate. Auctionator cache prices can be older than their capture time; daily lows are separate day buckets. The publisher reports an empty Auctioneer scan and skips it rather than creating prices or supply that were not observed.
 
 ## Development
 
+The main tree contains `index.html`, `app.js`, `styles.css`, `trade.js`, `data/`, `assets/`, and `tests/`. Publisher code lives in `publisher/src/`; safe addon decoders and item metadata live in `publisher/ingest/`.
+
 ```sh
+cargo build --release --locked --manifest-path publisher/Cargo.toml
+cargo test --locked --manifest-path publisher/Cargo.toml
 node --test tests/*.test.mjs
 node scripts/build.mjs
-python -m http.server 4173 --bind 127.0.0.1
 ```
 
-Visit `http://127.0.0.1:4173/`. Optional build copies public site inputs into `dist/`; Pages uses root directly. No `npm install`. If a sandbox blocks test subprocesses, run `node tests/data.test.mjs` directly.
-
-Tests cover unsafe Lua rejection, CBOR boundaries, Auctioneer formats/flags, safe exports, deduplication, CSV quoting, stack conversion, source separation, fixed-basket trends and resale arithmetic. Browser checks cover watchlists, calculator, worker imports, persistence, export and responsive layout.
+The optional build writes a preview to `dist/`; GitHub Pages serves the repository root. See [assets/ATTRIBUTION.md](assets/ATTRIBUTION.md) for image and format sources.

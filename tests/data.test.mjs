@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {parseLua, parseCSV, importText, decodeCBOR} from '../importer.js';
-import {aggregateListings, sanitizeSnapshot, mergeSnapshots, analyze, resale} from '../market.js';
+import {parseLua, parseCSV, importText, decodeCBOR} from '../publisher/ingest/importer.mjs';
+import {aggregateListings, sanitizeSnapshot, mergeSnapshots} from '../publisher/ingest/market.mjs';
+import {analyze} from './reference-analysis.mjs';
+import {resale} from '../trade.js';
 
 const date = '2026-11-01T12:00:00.000Z';
 const item = (id, price, quantity = null) => ({itemId:id, minBuyout:price, quantity});

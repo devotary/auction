@@ -8,13 +8,10 @@ const files = [
   'index.html',
   'styles.css',
   'app.js',
-  'market.js',
-  'importer.js',
-  'import-worker.js',
+  'trade.js',
   '.nojekyll',
-  'data/scans.json',
-  'data/demo.json',
-  'data/items.json',
+  'data/trends.json',
+  'data/history.json',
 ];
 
 async function copyAssetTree(source, target) {
@@ -43,4 +40,6 @@ for (const file of files) {
 }
 
 await copyAssetTree(join(root, 'assets'), join(dist, 'assets'));
+await copyAssetTree(join(root, 'data/reports'), join(dist, 'data/reports'));
+await copyAssetTree(join(root, 'data/history'), join(dist, 'data/history'));
 console.log(`Built static site in ${dist}`);

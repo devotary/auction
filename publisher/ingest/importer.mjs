@@ -1,4 +1,4 @@
-import {aggregateListings, sanitizeSnapshot, mergeSnapshots, isoDate, MAX_FILE_BYTES} from './market.js';
+import {aggregateListings, sanitizeSnapshot, mergeSnapshots, isoDate, MAX_FILE_BYTES} from './market.mjs';
 
 // SavedVariables are DATA. This parser accepts literals, never Lua execution.
 export function parseLua(input) {

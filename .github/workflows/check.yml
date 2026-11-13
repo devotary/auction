@@ -14,5 +14,8 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      - run: rustup update stable --no-self-update
+      - run: cargo build --release --locked --manifest-path publisher/Cargo.toml
+      - run: cargo test --locked --manifest-path publisher/Cargo.toml
       - run: node --test tests/*.test.mjs
       - run: node scripts/build.mjs

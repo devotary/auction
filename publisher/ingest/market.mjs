@@ -79,12 +79,6 @@ export function mergeSnapshots(...groups) {
   }
   return [...map.values()].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
 }
-export function median(values) {
-  const v = values.filter(Number.isFinite).sort((a, b) => a - b);
-  if (!v.length) return null;
-  const mid = Math.floor(v.length / 2);
-  return v.length % 2 ? v[mid] : (v[mid - 1] + v[mid]) / 2;
-}
 export function aggregateListings(rows) {
   const groups = new Map();
   for (const row of rows) {
@@ -102,39 +96,4 @@ export function aggregateListings(rows) {
     return {itemId: g.itemId, key: g.key, name: g.name, icon: g.icon, quality: g.quality, category: g.category,
       minBuyout: Math.round(g.prices[0].price), medianBuyout: Math.round(middle), quantity: g.quantity, listings: g.listings};
   }).filter(i => i.minBuyout > 0);
-}
-export function analyze(snapshots, days = 7) {
-  if (!snapshots.length) return {items: [], series: [], latest: null, baseline: null, basketSize: 0};
-  const ordered = [...snapshots].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
-  const latest = ordered.at(-1);
-  const target = Date.parse(latest.timestamp) - days * 86400000;
-  const baseline = ordered.findLast(s => Date.parse(s.timestamp) <= target) || ordered[0];
-  const window = ordered.filter(s => Date.parse(s.timestamp) >= Date.parse(baseline.timestamp));
-  const maps = window.map(s => new Map(s.items.map(i => [i.key, i])));
-  const old = maps[0];
-  const histories = new Map(latest.items.map(i => [i.key, []]));
-  window.forEach((s, index) => { for (const [key, i] of maps[index]) histories.get(key)?.push({timestamp: s.timestamp, price: i.minBuyout, quantity: i.quantity}); });
-  const items = latest.items.map(i => {
-    const history = histories.get(i.key);
-    const previous = old.get(i.key);
-    const reference = median(history.map(h => h.price));
-    return {...i, history, change: previous && baseline !== latest ? (i.minBuyout / previous.minBuyout - 1) * 100 : null,
-      supplyChange: previous?.quantity != null && i.quantity != null && baseline !== latest ? i.quantity - previous.quantity : null,
-      reference, spread: Math.floor(reference * 0.95) - i.minBuyout};
-  });
-  // Fix the basket at both endpoints. Sparse intermediate scans must not erase the
-  // whole history or change the composition of an otherwise comparable basket.
-  const basket = items.filter(i => old.has(i.key));
-  const series = window.map((s, index) => {
-    const complete = basket.length && basket.every(i => maps[index].has(i.key));
-    return {timestamp: s.timestamp, value: complete ? basket.reduce((sum, i) => sum + maps[index].get(i.key).minBuyout / old.get(i.key).minBuyout, 0) / basket.length * 100 : null};
-  });
-  return {items, latest, baseline, series, basketSize: basket.length};
-}
-export function resale({buy, sell, quantity = 1, cut = 5, expenses = 0}) {
-  for (const [k, v] of Object.entries({buy, sell, quantity, cut, expenses})) if (!Number.isFinite(v) || v < 0 || (k === 'cut' && v > 100) || (k === 'quantity' && (!Number.isInteger(v) || v < 1))) throw new Error('Enter valid, nonnegative amounts and a whole quantity.');
-  const gross = Math.round(sell * quantity);
-  if (![gross, Math.round(buy * quantity), Math.round(expenses)].every(Number.isSafeInteger)) throw new Error('Trade amounts are too large for accurate copper calculations.');
-  const fee = Math.floor(gross * cut / 100);
-  return {gross, fee, net: gross - fee - Math.round(buy * quantity) - Math.round(expenses)};
 }

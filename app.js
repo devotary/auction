@@ -1,4 +1,4 @@
-import {analyze, marketKey, snapshotKey, mergeSnapshots, resale, MAX_FILE_BYTES, catalog} from './market.js';
+import {resale} from './trade.js';
 
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -13,40 +13,19 @@ const money = value => {
   return `<span class="money">${value < 0 ? '−' : ''}${g ? `${count(g)}<span class="coin gold">g</span>` : ''}${s || g ? `${s}<span class="coin silver">s</span>` : ''}${c || (!g && !s) ? `${c}<span class="coin copper">c</span>` : ''}</span>`;
 };
 const icon = i => `<img class="item-icon quality-${i.quality}" src="assets/icons/${escape(i.icon)}.jpg" data-fallback="${escape(i.icon)}" width="36" height="36" alt="" loading="lazy">`;
-const state = {published:[], local:[], demo:[], sample:false, market:'', days:7, view:'overview', search:'', category:'', rank:'all', sort:'name', descending:false, page:0, current:null};
+const state = {market:'', days:7, view:'overview', search:'', category:'', rank:'all', sort:'name', descending:false, page:0, current:null, report:null, loading:false};
+const reportCache = new Map();
+let renderSequence = 0;
 let favorites;
 try { favorites = new Set(JSON.parse(localStorage.getItem('auction-ledger-watchlist') || '[]').filter(x => typeof x === 'string')); } catch { favorites = new Set(); }
-let dbPromise, toastTimer;
+let toastTimer;
 function notify(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').hidden = true, 4500); }
-function database() {
-  if (!dbPromise) dbPromise = new Promise((resolve, reject) => {
-    const r = indexedDB.open('auction-ledger', 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('history');
-    r.onsuccess = () => resolve(r.result);
-    r.onerror = () => reject(new Error('Browser storage is unavailable. Export your ledger before closing this page.'));
-  });
-  return dbPromise;
-}
-async function storage(value) {
-  const db = await database();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('history', value === undefined ? 'readonly' : 'readwrite');
-    const req = value === undefined ? tx.objectStore('history').get('snapshots') : tx.objectStore('history').put(value, 'snapshots');
-    let result;
-    req.onsuccess = () => result = req.result;
-    tx.oncomplete = () => resolve(result || []);
-    tx.onerror = () => reject(new Error('Could not save browser history. Export your ledger to avoid losing it.'));
-    tx.onabort = tx.onerror;
-  });
-}
-function allReal() { return mergeSnapshots(state.published, state.local); }
-function activeSnapshots() { return state.sample ? state.demo : allReal(); }
 function watchKey(i) { return `${state.market}|${i.key}`; }
 function isWatched(i) { return favorites.has(watchKey(i)); }
 
 function chart(points, {price = false, id = 'chart-fill', label = 'Market price index'} = {}) {
   const p = points.filter(v => Number.isFinite(v.value));
-  if (!p.length) return '<div class="empty-state"><h3>A little more history</h3><p>No common basket yet. Import comparable scans to build this chart.</p></div>';
+  if (!p.length) return '<div class="empty-state"><h3>A little more history</h3><p>No common basket yet. Save and publish comparable scans to build this chart.</p></div>';
   const width = 660, height = 250, left = 52, right = 16, top = 20, bottom = 32;
   const values = p.map(x => x.value), min = Math.min(...values), max = Math.max(...values);
   const pad = Math.max((max - min) * .2, max * .015, 1);
@@ -68,14 +47,33 @@ function sparkline(history) {
   return `<svg class="sparkline" viewBox="0 0 88 26" role="img" aria-label="Price history: ${(v[0]/10000).toFixed(4)} to ${(v.at(-1)/10000).toFixed(4)} gold"><path d="${path}"/></svg>`;
 }
 function setMarketOptions() {
-  const markets = new Map(activeSnapshots().map(s => [marketKey(s), s]));
+  const markets = new Map(state.report.markets.map(s => [s.key,s]));
   if (!markets.has(state.market)) state.market = markets.keys().next().value || '';
   $('#market-select').innerHTML = [...markets].map(([k, s]) => `<option value="${escape(k)}">${escape(s.realm)} · ${escape(s.faction)} · ${escape(s.source)}</option>`).join('');
   $('#market-select').value = state.market;
 }
-function render() {
+async function render() {
+  const sequence = ++renderSequence;
   setMarketOptions();
-  state.analysis = analyze(activeSnapshots().filter(s => marketKey(s) === state.market), state.days);
+  state.loading = true;
+  $('#ledger-panel').inert = true; $('#overview-content').inert = true;
+  $('#data-notice').textContent = 'Loading calculated trends…';
+  try {
+    const path = state.report.markets.find(m => m.key === state.market)?.periods[String(state.days)];
+    if (!path || !/^data\/reports\/[a-f0-9]{64}\.json$/.test(path)) throw new Error('This trend period is unavailable.');
+    if (!reportCache.has(path)) reportCache.set(path, fetch(path).then(r => { if (!r.ok) throw new Error('Could not load calculated trends.'); return r.json(); }).catch(error => {reportCache.delete(path);throw error;}));
+    const analysis = await reportCache.get(path);
+    if (sequence !== renderSequence) return;
+    state.analysis = analysis;
+  } catch (error) {
+    if (sequence === renderSequence) {
+      $('#data-notice').textContent = `${error.message} Choose another period or refresh to try again.`;
+      $('#ledger-panel').hidden=true;$('#overview-content').hidden=true;
+    }
+    return;
+  } finally {
+    if (sequence === renderSequence) { state.loading = false; $('#ledger-panel').inert = false; $('#overview-content').inert = false; }
+  }
   const a = state.analysis;
   const library = state.view === 'library';
   $('#overview-content').hidden = state.view !== 'overview';
@@ -87,28 +85,25 @@ function render() {
   $('#view-label').textContent = {overview:'Overview', ledger:'Item ledger', watchlist:'Watchlist', library:'Scan library'}[state.view];
   $$('[data-days]').forEach(el => el.setAttribute('aria-pressed', String(Number(el.dataset.days) === state.days)));
   $('#watch-count').textContent = favorites.size;
-  const real = allReal();
-  $('#data-notice').innerHTML = state.sample
-    ? `<p><strong>Sample market.</strong> Illustrative data, not current Auction House prices. Import your scans to make this ledger yours.</p><button class="text-button" ${real.length ? 'id="leave-sample"' : 'data-import'}>${real.length ? 'Use my scans →' : 'Add your data →'}</button>`
-    : `<p><strong>Your scan data.</strong> ${count(state.local.length)} browser snapshots · ${count(state.published.length)} published snapshots.</p>`;
+  $('#data-notice').innerHTML = `<p><strong>Published market data.</strong> ${count(state.report.snapshots.length)} snapshots · trends calculated on your PC. Latest saved observation: ${escape(fullDate(state.report.asOf))}.</p>`;
   $('#stat-items').textContent = count(a.items.length);
-  const knownSupply = a.items.filter(i => i.quantity != null);
-  $('#stat-supply').textContent = knownSupply.length ? count(knownSupply.reduce((s, i) => s + i.quantity, 0)) : 'Unknown';
-  $('#stat-supply-note').textContent = knownSupply.length ? `${count(knownSupply.length)} observed item types · buyout listings` : 'This source has no supply counts';
+  const knownSupplyCount = a.summary.knownSupplyCount;
+  $('#stat-supply').textContent = knownSupplyCount ? count(a.summary.listedSupply) : 'Unknown';
+  $('#stat-supply-note').textContent = knownSupplyCount ? `${count(knownSupplyCount)} observed item types · buyout listings` : 'This source has no supply counts';
   $('#stat-date').textContent = a.latest ? shortDate(a.latest.timestamp) : 'No scans';
   $('#stat-date-label').textContent = a.latest?.source === 'Auctionator daily lows' ? 'Latest day bucket' : a.latest?.source === 'Auctionator cache' ? 'Cache captured' : 'Latest observation';
-  $('#stat-date-note').textContent = a.latest ? `${new Date(a.latest.timestamp).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})} · ${a.latest.source}` : 'Import to begin';
+  $('#stat-date-note').textContent = a.latest ? `${new Date(a.latest.timestamp).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})} · ${a.latest.source}` : 'Scan to begin';
   const index = a.series.at(-1)?.value;
   $('#stat-index').innerHTML = index != null ? `${index.toFixed(1)} ${a.series.length > 1 ? `<span class="stat-change">${percent(index - 100)}</span>` : ''}` : '—';
   $('#stat-index-note').textContent = `${a.basketSize} matched items · base 100`;
   $('#index-chart').innerHTML = chart(a.series);
-  const omitted = a.series.filter(p => p.value == null).length;
-  $('#index-caption').textContent = a.baseline ? `Reference: ${fullDate(a.baseline.timestamp)} · ${a.basketSize} fixed, matched items · equal weight${omitted ? ` · ${omitted} sparse scans omitted` : ''}` : 'Import snapshots to build a price index.';
+  const omitted = a.summary.sparseScans;
+  $('#index-caption').textContent = a.baseline ? `Reference: ${fullDate(a.baseline.timestamp)} · ${a.basketSize} fixed, matched items · equal weight${omitted ? ` · ${omitted} sparse scans omitted` : ''}${a.seriesCount > a.series.length ? ` · chart samples ${a.series.length} of ${a.seriesCount} observations` : ''}` : 'Publish snapshots to build a price index.';
   $('#mover-period').textContent = state.days === 36500 ? 'All history' : state.days === 1 ? '24h lookback' : `${state.days}d lookback`;
-  const movers = [...a.items].filter(i => i.change != null).sort((x, y) => Math.abs(y.change) - Math.abs(x.change)).slice(0, 5);
-  $('#movers').innerHTML = movers.length ? movers.map(i => `<button class="mover" data-item="${escape(i.key)}">${icon(i)}<span class="mover-info"><span class="mover-name">${escape(i.name)}</span>${money(i.minBuyout)}</span>${percent(i.change)}</button>`).join('') : '<div class="empty-state"><h3>Every story needs a second scan.</h3><p>Import another observation to compare prices.</p></div>';
-  const spreads = a.items.filter(i => i.spread > 0 && i.history.length > 1);
-  $('#insight-text').innerHTML = spreads.length ? `<strong>${count(spreads.length)} items</strong> are below their observed median after a hypothetical 5% AH cut. Check the depth before you trade.` : 'No positive resale spreads against the observed median.';
+  const movers = a.summary.movers.map(key => a.items.find(i => i.key === key)).filter(Boolean);
+  $('#movers').innerHTML = movers.length ? movers.map(i => `<button class="mover" data-item="${escape(i.key)}">${icon(i)}<span class="mover-info"><span class="mover-name">${escape(i.name)}</span>${money(i.minBuyout)}</span>${percent(i.change)}</button>`).join('') : '<div class="empty-state"><h3>Every story needs a second scan.</h3><p>Publish another observation to compare prices.</p></div>';
+  const spreads = a.summary.positiveSpreads;
+  $('#insight-text').innerHTML = spreads ? `<strong>${count(spreads)} items</strong> are below their observed median after a hypothetical 5% AH cut. Check the depth before you trade.` : 'No positive resale spreads against the observed median.';
   renderLedger(); renderLibrary();
 }
 
@@ -145,11 +140,9 @@ function renderLedger() {
   $('#next-page').disabled = state.page === pages - 1;
 }
 function renderLibrary() {
-  const localKeys = new Set(state.local.map(snapshotKey));
-  const real = allReal().toReversed();
-  $('#library-body').innerHTML = real.length ? real.map((s, index) => `<tr><td>${escape(fullDate(s.timestamp))}</td><td>${escape(s.realm)} · ${escape(s.faction)}</td><td>${escape(s.source)}</td><td class="number">${count(s.items.length)}</td><td><span class="storage-badge">${localKeys.has(snapshotKey(s)) ? 'This browser' : 'Published'}</span></td><td>${localKeys.has(snapshotKey(s)) ? `<button class="text-button danger" data-delete="${index}">Remove local copy</button>` : ''}</td></tr>`).join('') : '<tr><td colspan="6"><div class="empty-state"><h3>Your story starts with a scan.</h3><p>Sample data is not part of your library. Import your first real observation above.</p></div></td></tr>';
+  const real = [...state.report.snapshots].reverse();
+  $('#library-body').innerHTML = real.map(s => `<tr><td>${escape(fullDate(s.timestamp))}</td><td>${escape(s.realm)} · ${escape(s.faction)}</td><td>${escape(s.source)}</td><td class="number">${count(s.itemCount)}</td><td><span class="storage-badge">Published</span></td></tr>`).join('');
   $('#export-button').disabled = !real.length;
-  $('#clear-button').disabled = !state.local.length;
 }
 
 function openItem(key) {
@@ -159,7 +152,7 @@ function openItem(key) {
   $('#item-identity').innerHTML = `<div class="item-identity">${icon(i)}<div><h2 id="item-title">${escape(i.name)}</h2><p>${escape(state.analysis.latest.realm)} · ${escape(state.analysis.latest.faction)} · #${i.itemId}</p></div></div>`;
   $('#item-stats').innerHTML = `<div><p>Lowest unit buyout</p><strong>${money(i.minBuyout)}</strong></div><div><p>Change vs reference</p><strong>${percent(i.change)}</strong></div><div><p>Listed units</p><strong class="mono">${count(i.quantity)}</strong></div>`;
   $('#item-chart').innerHTML = chart(i.history.map(h => ({timestamp:h.timestamp, value:h.price})), {price:true, id:'item-fill', label:`${i.name} minimum unit buyout history`});
-  $('#item-history-note').textContent = `${i.history.length} observations · ${fullDate(i.history[0].timestamp)} to ${fullDate(i.history.at(-1).timestamp)}. ${state.sample ? 'Illustrative sample data.' : ''}`;
+  $('#item-history-note').textContent = `${i.historyCount ?? i.history.length} observations · ${fullDate(i.history[0].timestamp)} to ${fullDate(i.history.at(-1).timestamp)}.${i.historyCount > i.history.length ? ` Chart shows ${i.history.length} measured samples; metrics use all observations.` : ''}`;
   $('#calc-buy').value = (i.minBuyout / 10000).toFixed(4);
   $('#calc-sell').value = (i.reference / 10000).toFixed(4);
   $('#calc-quantity').value = '1'; $('#calc-cut').value = '5'; $('#calc-expenses').value = '0';
@@ -177,49 +170,11 @@ function download(name, body, type) {
   const url = URL.createObjectURL(new Blob([body], {type}));
   const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-function showImport() {
-  const s = state.analysis?.latest;
-  $('#import-realm').value = state.sample ? '' : s?.realm || '';
-  $('#import-faction').value = s && !state.sample && ['Alliance','Horde','Neutral','Shared'].includes(s.faction) ? s.faction : 'Shared';
-  const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); $('#import-time').value = d.toISOString().slice(0,16);
-  $('#import-dialog').showModal();
-}
-function parseFile(file, options) {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./import-worker.js', import.meta.url), {type:'module'});
-    worker.onmessage = e => { worker.terminate(); e.data.error ? reject(new Error(e.data.error)) : resolve(e.data.snapshots); };
-    worker.onerror = () => { worker.terminate(); reject(new Error('Could not parse this file. Check its format and try again.')); };
-    worker.postMessage({file, options});
-  });
-}
-let importing = false;
-async function importFiles(files) {
-  if (importing || !files.length) return;
-  if (files.length > 30) { $('#import-result').textContent = 'Import at most 30 files at a time.'; return; }
-  if (!$('#import-time').value || !Number.isFinite(+new Date($('#import-time').value))) { $('#import-result').textContent = 'Choose the scan observation time.'; return; }
-  importing = true; $('#file-input').disabled = true;
-  $('#import-result').textContent = 'Reading scan data locally…';
-  const results = [];
-  for (const file of files) {
-    try {
-      if (file.size > MAX_FILE_BYTES) throw new Error('File exceeds the 64 MiB limit.');
-      const snapshots = await parseFile(file, {realm:$('#import-realm').value.trim(), faction:$('#import-faction').value, timestamp:new Date($('#import-time').value).toISOString()});
-      const next = mergeSnapshots(state.local, snapshots);
-      await storage(next); // Persist before claiming success or discarding a previous state.
-      state.local = next; state.sample = false; state.market = marketKey(snapshots.at(-1));
-      results.push(`<p class="positive">${escape(file.name)}: imported ${snapshots.length} snapshot${snapshots.length === 1 ? '' : 's'}. Saved in this browser.</p>`);
-    } catch (e) { results.push(`<p class="negative">${escape(file.name)}: ${escape(e.message)}</p>`); }
-    $('#import-result').innerHTML = results.join('');
-  }
-  importing = false; $('#file-input').disabled = false; $('#file-input').value = ''; state.page = 0; render();
-}
-
 document.addEventListener('click', async event => {
   const t = event.target.closest('button,a'); if (!t) return;
-  if (t.matches('[data-import]')) showImport();
-  if (t.id === 'leave-sample') { state.sample = false; render(); }
-  if (t.dataset.item) openItem(t.dataset.item);
-  if (t.dataset.watch) {
+  if (t.matches('[data-guide]')) $('#help-dialog').showModal();
+  if (t.dataset.item && !state.loading) openItem(t.dataset.item);
+  if (t.dataset.watch && !state.loading) {
     const i = state.analysis.items.find(i => i.key === t.dataset.watch), key = watchKey(i);
     const next = new Set(favorites); next.has(key) ? next.delete(key) : next.add(key);
     try { localStorage.setItem('auction-ledger-watchlist', JSON.stringify([...next])); favorites = next; render(); } catch { notify('Could not save watchlist. Browser storage may be disabled.'); }
@@ -227,11 +182,7 @@ document.addEventListener('click', async event => {
   if (t.dataset.days) { state.days = Number(t.dataset.days); state.page = 0; render(); }
   if (t.dataset.rank) { state.rank = t.dataset.rank; state.sort = {all:'name',movers:'change',supply:'quantity',spread:'spread'}[state.rank]; state.descending = state.rank !== 'all'; state.page = 0; renderLedger(); }
   if (t.dataset.sort) { state.descending = state.sort === t.dataset.sort ? !state.descending : t.dataset.sort !== 'name'; state.sort = t.dataset.sort; state.page = 0; renderLedger(); }
-  if (t.dataset.delete) {
-    const s = allReal().toReversed()[Number(t.dataset.delete)];
-    if (!s || !confirm(`Remove the browser copy of ${fullDate(s.timestamp)}? Export a backup first if needed.`)) return;
-    try { const next = state.local.filter(x => snapshotKey(x) !== snapshotKey(s)); await storage(next); state.local = next; state.sample = !allReal().length; render(); } catch (e) { notify(e.message); }
-  }
+
 });
 $('#search').addEventListener('input', e => { state.search = e.target.value; state.page = 0; renderLedger(); });
 $('#category').addEventListener('change', e => { state.category = e.target.value; state.page = 0; renderLedger(); });
@@ -242,16 +193,19 @@ $('#calculator-form').addEventListener('input', calculate);
 $('#calculator-form').addEventListener('submit', e => e.preventDefault());
 $('#help-button').addEventListener('click', () => $('#help-dialog').showModal());
 $('#opportunities-button').addEventListener('click', () => { state.rank = 'spread'; state.sort = 'spread'; state.descending = true; state.page = 0; renderLedger(); $('#ledger-panel').scrollIntoView({behavior:'auto',block:'start'}); });
-$('#file-input').addEventListener('change', e => importFiles([...e.target.files]));
-$('#drop-zone').addEventListener('dragover', e => { e.preventDefault(); $('#drop-zone').classList.add('dragging'); });
-$('#drop-zone').addEventListener('dragleave', () => $('#drop-zone').classList.remove('dragging'));
-$('#drop-zone').addEventListener('drop', e => { e.preventDefault(); $('#drop-zone').classList.remove('dragging'); importFiles([...e.dataTransfer.files]); });
-$('#export-button').addEventListener('click', () => { download('scans.json', JSON.stringify({version:1,snapshots:allReal()},null,2), 'application/json'); notify('Sanitized ledger exported. Upload scans.json to data/ to publish it.'); });
-$('#template-button').addEventListener('click', () => download('scan-template.csv', `itemId,name,minBuyout,quantity,listings,realm,faction,timestamp,source\n13463,Dreamfoil,24500,240,12,Your Realm,Alliance,${new Date().toISOString()},CSV\n13468,Black Lotus,1420000,16,16,Your Realm,Alliance,${new Date().toISOString()},CSV\n`, 'text/csv'));
-$('#sample-button').addEventListener('click', () => { state.sample = true; state.market = ''; state.view = 'overview'; location.hash = 'overview'; $('#import-dialog').close(); render(); });
-$('#clear-button').addEventListener('click', async () => {
-  if (!confirm('Clear all browser imports? Export your ledger first if you need a backup. Published data is unaffected.')) return;
-  try { await storage([]); state.local = []; state.sample = !state.published.length; state.market = ''; render(); notify('Browser imports cleared.'); } catch (e) { notify(e.message); }
+$('#export-button').addEventListener('click', async () => {
+  const button=$('#export-button');button.disabled=true;button.textContent='Preparing backup…';
+  try {
+    const snapshots=[];
+    for(let n=0;n<state.report.snapshots.length;n+=6) {
+      const batch=await Promise.all(state.report.snapshots.slice(n,n+6).map(async entry=>{
+        if(!/^data\/history\/[a-f0-9]{64}\.json$/.test(entry.file))throw new Error('Invalid archive reference.');
+        const response=await fetch(entry.file);if(!response.ok)throw new Error('Could not download the archive.');return response.json();
+      }));
+      snapshots.push(...batch);
+    }
+    download('scans.json',JSON.stringify({version:1,snapshots}),'application/json');
+  }catch(error){notify(error.message);}finally{button.disabled=false;button.textContent='Export ledger JSON ↓';}
 });
 document.addEventListener('keydown', e => { if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.target.matches('input,select,textarea') && !document.querySelector('dialog[open]')) { e.preventDefault(); if (state.view === 'library') location.hash = 'ledger'; $('#search').focus(); } });
 document.addEventListener('error', e => {
@@ -266,16 +220,15 @@ document.addEventListener('error', e => {
 function route() { state.view = ['overview','ledger','watchlist','library'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview'; state.page = 0; if (state.analysis) render(); }
 window.addEventListener('hashchange', route);
 async function boot() {
+  $('.market-toolbar').inert=true;$('#ledger-panel').inert=true;$('#overview-content').inert=true;
   try {
-    const get = async path => { const r = await fetch(path, {cache:'no-cache'}); if (!r.ok) throw new Error(`Could not load ${path} (${r.status}).`); return r.json(); };
-    const results = await Promise.allSettled([get('data/scans.json'), get('data/demo.json'), storage(), get('data/items.json')]);
-    if (results[3].status === 'fulfilled') Object.assign(catalog, results[3].value);
-    if (results[0].status === 'fulfilled') state.published = mergeSnapshots(results[0].value.snapshots || []);
-    else notify('Published scan history could not be loaded. Showing browser data or samples.');
-    if (results[1].status === 'fulfilled') state.demo = mergeSnapshots(results[1].value.snapshots || []);
-    if (results[2].status === 'fulfilled') state.local = mergeSnapshots(results[2].value);
-    else notify(results[2].reason.message);
-    state.sample = !allReal().length; route(); render();
-  } catch (e) { $('#data-notice').textContent = `Could not open the ledger: ${e.message}. Try refreshing or checking the published data file.`; }
+    const response = await fetch('data/trends.json', {cache:'no-store'});
+    if (!response.ok) throw new Error('Could not load the published trend index.');
+    state.report = await response.json();
+    if (state.report.version !== 1 || !state.report.markets?.length) throw new Error('Unsupported trend report. Run the local publisher to rebuild it.');
+    $('.market-toolbar').inert=false;
+    state.view = ['overview','ledger','watchlist','library'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
+    await render();
+  } catch (error) { $('#data-notice').textContent = `${error.message} Try refreshing.`; }
 }
 boot();

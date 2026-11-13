@@ -7,3 +7,5 @@ __pycache__/
 *.lua
 *.bak
 .DS_Store
+.local/
+publisher/target/
