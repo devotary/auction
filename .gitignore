@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.superdesign/tmp/
+test-results/
+__pycache__/
+*.lua
+*.bak
+.DS_Store
