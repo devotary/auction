@@ -89,8 +89,8 @@ function render() {
   $('#watch-count').textContent = favorites.size;
   const real = allReal();
   $('#data-notice').innerHTML = state.sample
-    ? `<span class="notice-mark">◇</span><p><strong>Sample market.</strong> Illustrative data, not current Auction House prices. Import your scans to make this ledger yours.</p><button class="text-button" ${real.length ? 'id="leave-sample"' : 'data-import'}>${real.length ? 'Use my scans →' : 'Add your data →'}</button>`
-    : `<span class="notice-mark">◇</span><p><strong>Your scan data.</strong> ${count(state.local.length)} browser snapshots · ${count(state.published.length)} published snapshots. ${a.latest ? `Latest observation: ${escape(fullDate(a.latest.timestamp))}.` : 'Import a scan to begin.'}</p>`;
+    ? `<p><strong>Sample market.</strong> Illustrative data, not current Auction House prices. Import your scans to make this ledger yours.</p><button class="text-button" ${real.length ? 'id="leave-sample"' : 'data-import'}>${real.length ? 'Use my scans →' : 'Add your data →'}</button>`
+    : `<p><strong>Your scan data.</strong> ${count(state.local.length)} browser snapshots · ${count(state.published.length)} published snapshots.</p>`;
   $('#stat-items').textContent = count(a.items.length);
   const knownSupply = a.items.filter(i => i.quantity != null);
   $('#stat-supply').textContent = knownSupply.length ? count(knownSupply.reduce((s, i) => s + i.quantity, 0)) : 'Unknown';
@@ -108,7 +108,7 @@ function render() {
   const movers = [...a.items].filter(i => i.change != null).sort((x, y) => Math.abs(y.change) - Math.abs(x.change)).slice(0, 5);
   $('#movers').innerHTML = movers.length ? movers.map(i => `<button class="mover" data-item="${escape(i.key)}">${icon(i)}<span class="mover-info"><span class="mover-name">${escape(i.name)}</span>${money(i.minBuyout)}</span>${percent(i.change)}</button>`).join('') : '<div class="empty-state"><h3>Every story needs a second scan.</h3><p>Import another observation to compare prices.</p></div>';
   const spreads = a.items.filter(i => i.spread > 0 && i.history.length > 1);
-  $('#insight-text').innerHTML = spreads.length ? `<strong>${count(spreads.length)} items</strong> are below their observed median after a hypothetical 5% AH cut. Check the depth before you trade.` : 'No positive resale spreads against the observed median. A quiet market is useful information, too.';
+  $('#insight-text').innerHTML = spreads.length ? `<strong>${count(spreads.length)} items</strong> are below their observed median after a hypothetical 5% AH cut. Check the depth before you trade.` : 'No positive resale spreads against the observed median.';
   renderLedger(); renderLibrary();
 }
 
@@ -128,7 +128,6 @@ function renderLedger() {
   state.page = Math.min(state.page, pages - 1);
   const visible = items.slice(state.page * size, (state.page + 1) * size);
   $('#ledger-title').firstChild.textContent = state.view === 'watchlist' ? 'Your watchlist ' : 'Item ledger ';
-  $('#ledger-eyebrow').textContent = state.view === 'watchlist' ? 'Keep an eye on your next trade' : 'The trading floor';
   $('#item-count').textContent = `${count(items.length)} items`;
   $$('[data-rank]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.rank === state.rank)));
   $$('[data-sort]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.sort === state.sort)));
