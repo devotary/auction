@@ -25,6 +25,8 @@ The dashboard loads one market and one period at a time, including on mobile. Ch
 
 The app prepares trend metrics before publishing. The browser draws the charts, filters and sorts report rows, and calculates only the amounts you enter in the trade calculator. The full sanitized archive downloads only when you request a library export.
 
+The interface uses Classic WoW artwork throughout: stone and parchment surfaces, metal window frames, red and stone buttons, native tabs, checkboxes, scrollbars, and coin icons. Frames keep their corners and repeat their edges as the layout changes size.
+
 ## Read prices with care
 
 - **Unit buyout** is the cheapest observed stack price divided by its stack size.
