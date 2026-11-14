@@ -6,7 +6,7 @@ The Auction Ledger turns World of Warcraft Auction House scans into a compact ma
 
 ## Publish a scan
 
-Finish your Auctioneer or Auctionator scans, then use `/reload` or log out so WoW saves its data. Launch **Auction Ledger Publisher** from the application menu, or run:
+Use the included [Auction Ledger Scanner](addon/README.md): open the Auction House and enter `/ald scan`. When it reports saved rows, use `/reload` or log out so WoW writes the file. The publisher also supports Auctionator and Auctioneer exports. Launch **Auction Ledger Publisher** from the application menu, or run:
 
 ```sh
 cd /path/to/auction

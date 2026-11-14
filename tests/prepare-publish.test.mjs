@@ -73,6 +73,17 @@ test('rejects overwriting an input source', async t => {
   await assert.rejects(prepare({ config: { inputs: [{ path: source }] }, historyPath: f.historyPath, outputPath: source }), /cannot replace an addon source/);
 });
 
+test('a not-yet-saved optional addon is skipped, while a malformed saved file still aborts',async t=>{
+  const f=await fixture(t,[snap('2024-01-01T00:00:00Z')]);
+  const file=join(f.dir,'AuctionLedger.lua');
+  const args={config:{inputs:[{path:file,optional:true}]},historyPath:f.historyPath,outputPath:f.outputPath};
+  const receipt=await prepare(args);
+  assert.equal(receipt.total,1);assert.match(receipt.warnings[0],/not saved yet/);
+  await writeFile(file,'AuctionLedgerDB = os.execute("unsafe")');
+  const before=await readFile(f.outputPath,'utf8');
+  await assert.rejects(prepare(args));assert.equal(await readFile(f.outputPath,'utf8'),before);
+});
+
 test('merges remote archive first so local same-identity corrections win', async t => {
   const remoteOnly = sanitizeSnapshot({ realm: 'Remote Realm', faction: 'Shared', source: 'Auctionator daily lows', timestamp: '2024-01-01T00:00:00Z', items: [{ itemId: 13463, minBuyout: 90 }] });
   const remoteCorrection = snap('2024-02-01T00:00:00Z', 'Realm', 100);

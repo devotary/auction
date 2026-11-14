@@ -17,5 +17,7 @@ jobs:
       - run: rustup update stable --no-self-update
       - run: cargo build --release --locked --manifest-path publisher/Cargo.toml
       - run: cargo test --locked --manifest-path publisher/Cargo.toml
+      - run: sudo apt-get update
+      - run: sudo apt-get install -y lua5.1
       - run: node --test tests/*.test.mjs
       - run: node scripts/build.mjs

@@ -1,6 +1,6 @@
 # Daily Auction Ledger publisher
 
-The desktop app reads Auctionator and Auctioneer SavedVariables, preserves sanitized history, calculates trends locally in Rust, and pushes only generated market JSON to GitHub Pages. No web server, database service, Tailscale or port forwarding is needed. Your PC can be off once the push completes.
+The desktop app reads Auction Ledger Scanner, Auctionator and Auctioneer SavedVariables, preserves sanitized history, calculates trends locally in Rust, and pushes only generated market JSON to GitHub Pages. No web server, database service, Tailscale or port forwarding is needed. Your PC can be off once the push completes.
 
 ## Daily use
 
@@ -18,7 +18,7 @@ cd /path/to/auction
 
 Configure SavedVariables paths, the fallback faction for Auctionator markets, and the game timezone in ignored `.local/publisher/config.json`. The scanner and Auctioneer use their explicitly saved faction and timestamps.
 
-At setup, Auctionator provided valid prices and daily history. The saved Auctioneer file contained no buyout listings; it is skipped with a warning until a complete scan is saved. No supply counts or sales are invented.
+The included [scanner addon](addon/README.md) captures observed listing quantities and prices using the Forever 1.60.1 replicate API. Its first live in-game scan still needs confirmation. Auctionator supplies existing prices and daily history. Auctioneer exports are also supported. No supply counts or sales are invented.
 
 ## Preview and configuration
 
@@ -45,8 +45,8 @@ For another installation, create this private config (absolute paths):
   "deployKey": "/absolute/path/to/private-deploy-key",
   "timezone": "Etc/UTC",
   "inputs": [
-    {"path": "/absolute/path/to/Auctionator.lua", "faction": "Alliance"},
-    {"path": "/absolute/path/to/Auc-ScanData.lua"}
+    {"path": "/absolute/path/to/AuctionLedger.lua", "optional": true},
+    {"path": "/absolute/path/to/Auctionator.lua", "faction": "Alliance"}
   ]
 }
 ```
@@ -65,7 +65,7 @@ Metrics use every relevant observation. Item charts show at most 32 evenly space
 
 All prices are copper. Realm, faction and source remain separate. Baseline, fixed-basket index, observed medians, price swings, availability and hypothetical 5% resale spreads follow the documented [market definitions](README.md#reading-the-ledger). No claim of confirmed sales or realized net gold is derived from scan disappearance. Cached prices can predate capture time; daily lows are separate day buckets.
 
-Only aggregate market fields are exported. Raw Lua, seller/character/account information, addon settings, local paths and credentials stay off the site. Published market data is public. Source reads are checked for concurrent changes and capped at 64 MiB per input. A malformed file aborts preparation without replacing saved history; an empty Auctioneer scan is the one explicitly skipped condition. Identical Auctionator cache contents do not create another fake observation just because the file was rewritten.
+Only aggregate market fields are exported. Raw Lua, seller/character/account information, addon settings, local paths and credentials stay off the site. Published market data is public. Source reads are checked for concurrent changes and capped at 64 MiB per input. A malformed file aborts preparation without replacing saved history. An absent optional input, an empty Auctioneer file, or a scanner file with no saved buyout observations is skipped with a message. Identical Auctionator cache contents do not create another fake observation just because the file was rewritten.
 
 ## History, retries and recovery
 
@@ -78,6 +78,8 @@ If the dedicated checkout is dirty or diverged, the app stops. Preserve it for i
 The earlier SQLite experiment remains on the `local-sqlite` branch for comparison. The publisher workflow uses static Pages and requires no running local services.
 
 ## Checks
+
+Development checks also require Lua 5.1 (`lua5.1`) to simulate the addon's WoW event loop. The game already provides Lua; the desktop publisher does not require a separate Lua interpreter.
 
 ```sh
 cargo build --release --locked --manifest-path publisher/Cargo.toml

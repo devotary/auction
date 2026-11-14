@@ -1,4 +1,5 @@
 import {aggregateListings, sanitizeSnapshot, mergeSnapshots, isoDate, MAX_FILE_BYTES} from './market.mjs';
+import {createHash} from 'node:crypto';
 
 // SavedVariables are DATA. This parser accepts literals, never Lua execution.
 export function parseLua(input) {
@@ -155,6 +156,41 @@ function utf8(value) {
   if (typeof value !== 'string') return value;
   try { return new TextDecoder('utf-8', {fatal:true}).decode(Uint8Array.from(value,c => c.charCodeAt(0))); } catch { return value; }
 }
+
+function ledger(root) {
+  const db = root.AuctionLedgerDB;
+  if (db.version !== 1 || !db.scans || typeof db.scans !== 'object') throw new Error('Unsupported Auction Ledger saved-data format.');
+  const scans=values(db.scans);
+  if (scans.length>3) throw new Error('Auction Ledger file exceeds its retained scan limit.');
+  const result=[];
+  for (const scan of scans) {
+    if (scan?.status !== 'saved') continue; // Interrupted work is never an observation.
+    const variants=scan.variants,rawRows=values(scan.rows);
+    if (!variants || typeof variants !== 'object' || rawRows.length>250000 || scan.captured!==rawRows.length || !Number.isInteger(scan.received) || scan.received<rawRows.length) throw new Error('Invalid Auction Ledger listing counts.');
+    const timestamp=isoDate(scan.timestamp),startedAt=isoDate(scan.startedAt);
+    if (Date.parse(startedAt)>Date.parse(timestamp)) throw new Error('Invalid Auction Ledger scan interval.');
+    const metadata=new Map();
+    for (const [index,m] of Object.entries(variants)) {
+      if (!/^\d+$/.test(index) || !m || !Number.isInteger(m.itemId) || m.itemId<1 || m.itemId>1e9 || typeof m.itemString!=='string' || m.itemString.length>2048 || !/^item:\d+(?::[-\d]*)*$/.test(m.itemString)) throw new Error('Invalid Auction Ledger item variant.');
+      const fields=m.itemString.split(':').map(field=>field===''?'0':field);
+      if (Number(fields[1])!==m.itemId || fields.length>256 || fields.slice(1).some(field=>!Number.isSafeInteger(Number(field)))) throw new Error('Invalid Auction Ledger item identity.');
+      for (const index of [8,9,10]) if (index<fields.length) fields[index]='0';
+      while (fields.length>2 && fields.at(-1)==='0') fields.pop();
+      const key=fields.length===2 ? String(m.itemId) : `${m.itemId}:v1:${createHash('sha256').update(fields.join(':')).digest('hex')}`;
+      metadata.set(Number(index),{itemId:m.itemId,key,name:utf8(m.name),quality:m.quality,
+        category:m.classID===7?'Trade goods':m.classID===0?'Consumables':[2,4].includes(m.classID)?'Equipment':m.classID===9?'Recipes':'Other'});
+    }
+    const rows=rawRows.map(row=>{
+      if (typeof row!=='string' || row.length>200 || !/^\d+;\d+;\d+;\d+;\d+;\d+$/.test(row)) throw new Error('Invalid Auction Ledger compact listing.');
+      const [variant,count,buyout,minBid,bid,timeLeft]=row.split(';').map(Number);
+      if (![variant,count,buyout,minBid,bid,timeLeft].every(Number.isSafeInteger) || count<1 || count>1e9 || Math.max(buyout,minBid,bid)>1e14 || timeLeft>4 || !metadata.has(variant)) throw new Error('Invalid Auction Ledger listing values.');
+      return {...metadata.get(variant),count,buyout};
+    });
+    const items=aggregateListings(rows);
+    if (items.length) result.push(sanitizeSnapshot({realm:utf8(scan.realm),faction:scan.faction,source:'Auction Ledger',timestamp,coverage:'partial',items}));
+  }
+  return mergeSnapshots(result);
+}
 function auctioneer(root, options) {
   const result = [];
   const db = root.AucScanData;
@@ -255,9 +291,10 @@ export function importText(input, filename, options = {}) {
   }
   if (extension === 'lua') {
     const root = parseLua(input.replace(/^\uFEFF/, ''));
+    if (root.AuctionLedgerDB) return ledger(root);
     if (root.AucScanData) return auctioneer(root, options);
     if (root.AUCTIONATOR_PRICE_DATABASE) return auctionator(root, options);
-    throw new Error('Select Auc-ScanData.lua or Auctionator.lua, not a configuration file.');
+    throw new Error('Select AuctionLedger.lua, Auc-ScanData.lua or Auctionator.lua, not a configuration file.');
   }
   if (extension !== 'csv') throw new Error('Choose a .lua, .csv, or .json file.');
   const raw = parseCSV(input);

@@ -122,3 +122,23 @@ test('Auctionator CBOR v8/realm2 imports cache and daily lows without fabricatin
   assert.throws(()=>decodeCBOR(String.fromCharCode(0xbf,0xff)));
   assert.throws(()=>decodeCBOR(binary.slice(0,-1)));
 });
+
+test('Auction Ledger compact rows preserve item variants, stack prices and privacy',()=>{
+  const make=(change='')=>`AuctionLedgerDB={version=1,scans={{status="saved",realm="Test",faction="Alliance",startedAt=1793534400,timestamp=1793534500,coverage="full",captured=4,received=4,
+    seller="PRIVATE_OWNER",variants={
+      {itemId=13463,itemString="item:13463:0:0:0:0:0:0:111:60:0",name="Dreamfoil",classID=7},
+      {itemId=13463,itemString="item:13463:0:0:0:0:0:0:222:55:99",name="Dreamfoil",classID=7},
+      {itemId=13463,itemString="item:13463:0:0:0:0:0:-18:333:60:0",name="Variant",classID=7}},
+    rows={"1;20;20000;100;0;4","2;10;12000;100;0;4","1;5;0;100;0;4","3;1;50000;100;0;4"}${change}}}}`;
+  const [scan]=importText(make(),'AuctionLedger.lua');
+  assert.equal(scan.source,'Auction Ledger');assert.equal(scan.coverage,'partial');
+  assert.equal(scan.items.length,2);assert.equal(scan.items[0].quantity,30);assert.equal(scan.items[0].listings,2);
+  assert.equal(scan.items[0].minBuyout,1000);assert.equal(scan.items[0].medianBuyout,1000);
+  assert.notEqual(scan.items[1].key,scan.items[0].key);assert.ok(scan.items[1].key.length<120);
+  assert.doesNotMatch(JSON.stringify(scan),/PRIVATE_OWNER|seller|received|itemString/);
+  assert.deepEqual(importText('AuctionLedgerDB={version=1,scans={}}','AuctionLedger.lua'),[]);
+  assert.deepEqual(importText('AuctionLedgerDB={version=1,scans={{status="capturing"}}}','AuctionLedger.lua'),[]);
+  for(const [from,to] of [['version=1','version=2'],['captured=4','captured=9'],['item:13463:0','item:999:0'],['1;20;20000','9;20;20000'],['1;20;20000','1;0;20000'],['1;20;20000','1;20;-20000'],[';0;4"',';0;9"']]){
+    assert.throws(()=>importText(make().replace(from,to),'AuctionLedger.lua'));
+  }
+});

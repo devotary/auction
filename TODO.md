@@ -6,3 +6,5 @@
 - [x] Remove superseded browser-import tools, sample data and preview services.
 - [x] Verify calculations, read-only imports, repeat runs, publishing and phone layouts.
 - [x] Deploy and verify the live GitHub Pages dashboard.
+- [x] Build a lightweight Forever scanner and test its output through the Rust publishing pipeline.
+- [ ] Confirm the first live scan after enabling Auction Ledger Scanner in WoW.

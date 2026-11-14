@@ -5,6 +5,8 @@ test-results/
 __pycache__/
 *.tmp
 *.lua
+!addon/AuctionLedger/*.lua
+!tests/addon.test.lua
 *.bak
 .DS_Store
 .local/

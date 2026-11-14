@@ -89,7 +89,7 @@ async function render() {
   $('#stat-items').textContent = count(a.items.length);
   const knownSupplyCount = a.summary.knownSupplyCount;
   $('#stat-supply').textContent = knownSupplyCount ? count(a.summary.listedSupply) : 'Unknown';
-  $('#stat-supply-note').textContent = knownSupplyCount ? `${count(knownSupplyCount)} observed item types · buyout listings` : 'This source has no supply counts';
+  $('#stat-supply-note').textContent = knownSupplyCount ? `${count(knownSupplyCount)} observed item types · buyout listings${a.latest.source === 'Auction Ledger' ? ' · partial capture' : ''}` : 'This source has no supply counts';
   $('#stat-date').textContent = a.latest ? shortDate(a.latest.timestamp) : 'No scans';
   $('#stat-date-label').textContent = a.latest?.source === 'Auctionator daily lows' ? 'Latest day bucket' : a.latest?.source === 'Auctionator cache' ? 'Cache captured' : 'Latest observation';
   $('#stat-date-note').textContent = a.latest ? `${new Date(a.latest.timestamp).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})} · ${a.latest.source}` : 'Scan to begin';

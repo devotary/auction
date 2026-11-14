@@ -58,7 +58,13 @@ export async function prepare({ config, historyPath, outputPath, remoteHistoryPa
 
   for (const [index, inputConfig] of config.inputs.entries()) {
     const path = sources[index];
-    const { input, mtime } = await readStable(path);
+    let source;
+    try { source=await readStable(path); }
+    catch(error) {
+      if(inputConfig.optional===true && error.code==='ENOENT'){warnings.push(`Input ${index+1}: optional scan file is not saved yet.`);continue;}
+      throw error;
+    }
+    const {input,mtime}=source;
     try {
       const incoming = importText(input, basename(path), {
         realm: inputConfig.realm,
@@ -66,6 +72,7 @@ export async function prepare({ config, historyPath, outputPath, remoteHistoryPa
         timestamp: mtime.toISOString(),
       });
       const accepted = [];
+      if(!incoming.length)warnings.push(`Input ${index+1}: no saved buyout observations yet. Complete a scan and /reload.`);
       for (const snapshot of incoming) {
         if (snapshot.source === 'Auctionator cache') {
           const latest = [...snapshots, ...accepted]
