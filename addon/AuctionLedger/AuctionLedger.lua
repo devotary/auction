@@ -2,7 +2,7 @@
 local WAIT, RESOLVE, QUIET, COOLDOWN = 900, 90, 15, 900
 local MAX_ROWS, MAX_BYTES, KEEP_BYTES = 250000, 24 * 1024 * 1024, 40 * 1024 * 1024
 local events = CreateFrame("Frame", "AuctionLedgerEvents")
-local job, window, label, scanButton, cancelButton
+local job, window, label, scanButton, saveButton, cancelButton
 local auctionOpen = false
 local elapsedSincePoll = 0
 
@@ -42,7 +42,7 @@ local function finish(reason, save)
     if not current then return end
     job = nil
     events:SetScript("OnUpdate", nil)
-    if scanButton then scanButton:Enable(); cancelButton:Disable() end
+    if scanButton then scanButton:Enable(); saveButton:Disable(); cancelButton:Disable() end
     local db = database()
     if not db then return end
     db.lastAttempt = {timestamp = time(), status = save and "saved" or "stopped", message = reason}
@@ -69,6 +69,15 @@ local function finish(reason, save)
         status(reason .. "\nPrevious scans kept.")
         say(reason .. " Previous scans kept.")
     end
+end
+
+local function stopAndSave()
+    if not job then say("No scan is running."); return end
+    if #job.rows == 0 then
+        say("No rows captured yet. The scan is still running; Cancel discards it.")
+        return
+    end
+    finish("Stopped early by user", true)
 end
 
 local function readRow(index)
@@ -106,6 +115,7 @@ local function readRow(index)
     -- variant;stack quantity;whole-stack buyout;minimum bid;current bid;time-left band
     local row = ("%d;%d;%.0f;%.0f;%.0f;%d"):format(id, count, buyout, minBid or 0, bid or 0, timeLeft or 0)
     job.rows[#job.rows + 1] = row
+    if saveButton and #job.rows == 1 then saveButton:Enable() end
     job.bytes = job.bytes + #row + 64
     job.lastProgress = GetTime()
     return true
@@ -147,11 +157,12 @@ local function step()
         -- No end-of-stream flag exists: a quiet list is still marked partial.
         finish("Replicate list settled", true); return
     end
-    if #job.rows < total and now - math.max(job.lastProgress, job.lastGrowth, job.lastEvent) >= RESOLVE then
+    -- Cache notifications alone are not progress; unresolved rows must not extend this wait forever.
+    if #job.rows < total and now - math.max(job.lastProgress, job.lastGrowth) >= RESOLVE then
         finish("Unresolved rows omitted after waiting for item data", #job.rows > 0); return
     end
     if now - job.began > WAIT + RESOLVE then finish("Capture timed out", false); return end
-    status(("Captured %d / %d returned rows\n%ds elapsed. Keep the AH open; do not run another scanner."):format(#job.rows, total, math.floor(now - job.began)))
+    status(("Captured %d / %d returned rows (%d remaining)\n%ds elapsed. Stop and Save keeps captured rows.\nKeep the AH open while scanning."):format(#job.rows, total, total - #job.rows, math.floor(now - job.began)))
 end
 
 local function start(faction)
@@ -171,7 +182,7 @@ local function start(faction)
         total = 0, cursor = 1, nextPass = 0, bytes = 1024,
         queue = {}, retry = {}, variants = {}, rows = {}, byVariant = {}, requested = {}}
     elapsedSincePoll = 0
-    if scanButton then scanButton:Disable(); cancelButton:Enable() end
+    if scanButton then scanButton:Disable(); saveButton:Disable(); cancelButton:Enable() end
     status("Waiting for the server's auction list…\nThis can take several minutes. Keep the AH open.")
     say("Requested one full-list replication. Keep the AH open and leave other scan tools idle.")
     events:SetScript("OnUpdate", function(_, elapsed)
@@ -197,10 +208,13 @@ local function showWindow()
         label:SetPoint("TOPLEFT", 16, -40); label:SetSize(308, 90); label:SetJustifyH("LEFT")
         label:SetText("Open the Auction House, then scan.\nAfter saving: /reload, then run the desktop publisher.")
         scanButton = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
-        scanButton:SetSize(145, 26); scanButton:SetPoint("BOTTOMLEFT", 16, 16); scanButton:SetText("Scan auctions")
+        scanButton:SetSize(98, 26); scanButton:SetPoint("BOTTOMLEFT", 16, 16); scanButton:SetText("Scan auctions")
         scanButton:SetScript("OnClick", function() start() end)
+        saveButton = CreateFrame("Button", "AuctionLedgerSaveButton", window, "UIPanelButtonTemplate")
+        saveButton:SetSize(98, 26); saveButton:SetPoint("BOTTOM", 0, 16); saveButton:SetText("Stop and Save")
+        saveButton:Disable(); saveButton:SetScript("OnClick", stopAndSave)
         cancelButton = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
-        cancelButton:SetSize(145, 26); cancelButton:SetPoint("BOTTOMRIGHT", -16, 16); cancelButton:SetText("Cancel scan")
+        cancelButton:SetSize(98, 26); cancelButton:SetPoint("BOTTOMRIGHT", -16, 16); cancelButton:SetText("Cancel")
         cancelButton:Disable(); cancelButton:SetScript("OnClick", function() finish("Cancelled", false) end)
     end
     window:Show()
@@ -229,9 +243,10 @@ SlashCmdList.AUCTIONLEDGER = function(command)
     local action = (command or ""):lower():match("^%s*(.-)%s*$")
     if action == "scan" or action == "scan neutral" then
         showWindow(); start(action == "scan neutral" and "Neutral" or nil)
+    elseif action == "save" then stopAndSave()
     elseif action == "cancel" then finish("Cancelled", false)
     elseif action == "status" then
         local db = database()
         if db then say(job and ("Capturing: %d / %d rows"):format(#job.rows, job.total) or ("%d saved scan(s). %s"):format(#db.scans, db.lastAttempt and db.lastAttempt.message or "No scan attempted.")) end
-    else showWindow(); say("/ald scan · /ald scan neutral · /ald cancel · /ald status") end
+    else showWindow(); say("/ald scan · /ald scan neutral · /ald save · /ald cancel · /ald status") end
 end

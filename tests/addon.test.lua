@@ -5,11 +5,13 @@ end
 local function harness(previous)
     local h = {clock = 0, frames = {}, rows = {}, requests = 0, reads = 0, loads = 0, messages = {}}
     local function object()
-        local obj = {scripts = {}, registered = {}}
+        local obj = {scripts = {}, registered = {}, enabled = true}
         function obj:SetScript(name, fn) self.scripts[name] = fn end
         function obj:RegisterEvent(name) self.registered[name] = true end
         function obj:CreateFontString() return object() end
         function obj:SetText(text) self.text = text end
+        function obj:Enable() self.enabled = true end
+        function obj:Disable() self.enabled = false end
         return setmetatable(obj, {__index = function() return function() end end})
     end
     local env = setmetatable({AuctionLedgerDB = previous, SlashCmdList = {}, UIParent = {}}, {__index = _G})
@@ -110,7 +112,48 @@ equal(unresolved.env.AuctionLedgerDB.scans[1].captured, 1)
 equal(unresolved.env.AuctionLedgerDB.scans[1].unresolved, 1)
 equal(unresolved.env.AuctionLedgerDB.scans[1].coverage, "partial")
 
+local notified = harness()
+notified.rows = {{}, {pending = true}}
+notified:command("scan"); notified:event("REPLICATE_ITEM_LIST_UPDATE")
+for _ = 1, 92 do notified:event("REPLICATE_ITEM_LIST_UPDATE"); notified:advance(1) end
+equal(notified.env.AuctionLedgerDB.scans[1].captured, 1)
+equal(notified.env.AuctionLedgerDB.scans[1].unresolved, 1)
+equal(notified.frame.scripts.OnUpdate, nil)
+
 local old = success.env.AuctionLedgerDB.scans[1]
+local stopped = harness({version = 1, scans = {old}})
+stopped.clock = 100
+stopped.rows = {{buyout = 15000, count = 5}, {pending = true}}
+stopped:command("scan"); stopped:event("REPLICATE_ITEM_LIST_UPDATE"); stopped:advance(1)
+equal(stopped.frames.AuctionLedgerSaveButton.enabled, true)
+stopped:command("save")
+equal(#stopped.env.AuctionLedgerDB.scans, 2)
+equal(stopped.env.AuctionLedgerDB.scans[1], old)
+local partial = stopped.env.AuctionLedgerDB.scans[2]
+equal(partial.reason, "Stopped early by user")
+equal(partial.status, "saved"); equal(partial.coverage, "partial")
+equal(partial.captured, 1); equal(partial.received, 2); equal(partial.unresolved, 1)
+equal(partial.rows[1], "1;5;15000;100;0;4")
+equal(stopped.frame.scripts.OnUpdate, nil)
+equal(stopped.frames.AuctionLedgerSaveButton.enabled, false)
+stopped:command("save"); stopped:command("cancel"); stopped:advance(100)
+equal(#stopped.env.AuctionLedgerDB.scans, 2) -- No duplicate or post-save mutations.
+
+local empty = harness()
+empty.rows = {{}}
+empty:command("scan"); empty:command("save")
+equal(#empty.env.AuctionLedgerDB.scans, 0)
+equal(empty.frames.AuctionLedgerSaveButton.enabled, false)
+assert(empty.frame.scripts.OnUpdate) -- An empty save leaves the scan running.
+empty:command("cancel")
+
+local clicked = harness()
+clicked.rows = {{}, {pending = true}}
+clicked:command("scan"); clicked:event("REPLICATE_ITEM_LIST_UPDATE"); clicked:advance(1)
+clicked.frames.AuctionLedgerSaveButton.scripts.OnClick()
+equal(clicked.env.AuctionLedgerDB.scans[1].reason, "Stopped early by user")
+equal(clicked.env.AuctionLedgerDB.scans[1].captured, 1)
+
 for _, mode in ipairs({"cancel", "close", "timeout", "shrink", "error"}) do
     local h = harness({version = 1, scans = {old}})
     h.rows = {{}, {}}
@@ -157,4 +200,8 @@ end
 local data = "AuctionLedgerDB = " .. literal(success.env.AuctionLedgerDB)
 assert(not data:find("PRIVATE_", 1, true))
 if arg[1] then local file = assert(io.open(arg[1], "wb")); file:write(data); file:close() end
-print("PASS: streaming, delayed metadata, unresolved rows, zero-based batches, cooldown, repeat scans, cancellation, AH close, timeout, changed list, request failure, retention and private fields")
+if arg[2] then
+    local file = assert(io.open(arg[2], "wb"))
+    file:write("AuctionLedgerDB = " .. literal(stopped.env.AuctionLedgerDB)); file:close()
+end
+print("PASS: streaming, delayed metadata, stalled cache events, stop-and-save button/command, empty saves, zero-based batches, cooldown, repeat scans, cancellation, AH close, timeout, changed list, request failure, retention and private fields")

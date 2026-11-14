@@ -9,4 +9,5 @@
 - [x] Build a lightweight Forever scanner and test its output through the Rust publishing pipeline.
 - [x] Apply Classic WoW textures to the full website interface, including frames, trim and controls.
 - [x] Remove visible credits and branding, and retire manual website JSON controls.
+- [x] Add Stop and Save for partial scans and bound retries when cache events provide no new rows.
 - [ ] Confirm the first live scan after enabling Auction Ledger Scanner in WoW.

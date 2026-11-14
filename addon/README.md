@@ -14,7 +14,11 @@ Open the Auction House, then enter:
 
 The scanner requests one list. Keep the Auction House open and leave other auction scanners idle while it runs. The first response can take several minutes; `/ald status` shows progress. When rows settle, use `/reload` so WoW writes SavedVariables, then run the desktop publisher described in [PUBLISHER.md](../PUBLISHER.md).
 
-Use `/ald scan neutral` to label the scan as Neutral. `/ald cancel` stops the current capture without saving it. `/ald status` reports progress or the last attempt. Closing the Auction House also stops the capture without replacing saved scans.
+Click **Stop and Save** or enter `/ald save` to keep the rows already captured without waiting for the remaining items. The result is a saved partial scan with captured, received and unresolved counts. Then `/reload` and run the publisher as usual. The button is enabled once at least one row is captured; an empty `/ald save` leaves the scan running.
+
+Use `/ald scan neutral` to label the scan as Neutral. **Cancel** or `/ald cancel` discards the current capture. `/ald status` reports progress or the last attempt. Closing the Auction House also stops the capture without replacing saved scans.
+
+Updating an already loaded addon requires `/reload`. The old version cannot save the active scan early, so finish that scan before reloading if you want to keep it. Installing the updated files does not interrupt it.
 
 The API may throttle successful full-list requests for about 15 minutes. The addon applies its own 15-minute cooldown after a response, but it cannot see other characters’ or addons’ server-side requests. If no response arrives, wait and try again later; the addon gives up after 15 minutes without a response.
 
@@ -26,6 +30,6 @@ Each compact row stores a variant index, stack count, buyout, minimum bid, curre
 
 The publisher converts buyout listings into minimum and weighted-median unit prices, listed quantity, listing count, variant, and timestamp. Bid-only rows do not become prices. Raw bids and time-left bands are not included in the published market data.
 
-Every scan is marked **partial**. A quiet list for 15 seconds is a settling heuristic, not proof that the server sent every auction. Rows that remain unresolved after 90 seconds are omitted. Commodity coverage is unverified; sales and completed transactions are not recorded. See Blizzard’s [Forever Auction House API reference](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated/AuctionHouseDocumentation.lua) for the replicate API signatures.
+Every scan is marked **partial**. A quiet list for 15 seconds is a settling heuristic, not proof that the server sent every auction. After 90 seconds with no newly captured rows or growth in the result list, unresolved rows are omitted and the captured rows are saved. Cache notifications alone do not reset this timer. Commodity coverage is unverified; sales and completed transactions are not recorded. See Blizzard’s [Forever Auction House API reference](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated/AuctionHouseDocumentation.lua) for the replicate API signatures.
 
 This addon has not yet had a first scan verified in the actual Forever client. Treat the first run as an in-game check: confirm `/ald status` reports saved rows, reload, and make sure the publisher imports the new snapshot before relying on its trend history.
