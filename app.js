@@ -82,10 +82,10 @@ async function render() {
   $('#library-panel').hidden = !library;
   $('.market-toolbar').hidden = library;
   $$('[data-view]').forEach(el => { if (el.dataset.view === state.view) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); });
-  $('#view-label').textContent = {overview:'Overview', ledger:'Item ledger', watchlist:'Watchlist', library:'Scan library'}[state.view];
+  $('#view-label').textContent = {overview:'Overview', ledger:'Item ledger', watchlist:'Watchlist', library:'Scans'}[state.view];
   $$('[data-days]').forEach(el => el.setAttribute('aria-pressed', String(Number(el.dataset.days) === state.days)));
   $('#watch-count').textContent = favorites.size;
-  $('#data-notice').innerHTML = `<p><strong>Published market data.</strong> ${count(state.report.snapshots.length)} snapshots · trends calculated on your PC. Latest saved observation: ${escape(fullDate(state.report.asOf))}.</p>`;
+  $('#data-notice').innerHTML = `<p><strong>${count(state.report.snapshots.length)} saved scans.</strong> Latest observation: ${escape(fullDate(state.report.asOf))}.</p>`;
   $('#stat-items').textContent = count(a.items.length);
   const knownSupplyCount = a.summary.knownSupplyCount;
   $('#stat-supply').textContent = knownSupplyCount ? count(a.summary.listedSupply) : 'Unknown';
@@ -141,8 +141,7 @@ function renderLedger() {
 }
 function renderLibrary() {
   const real = [...state.report.snapshots].reverse();
-  $('#library-body').innerHTML = real.map(s => `<tr><td>${escape(fullDate(s.timestamp))}</td><td>${escape(s.realm)} · ${escape(s.faction)}</td><td>${escape(s.source)}</td><td class="number">${count(s.itemCount)}</td><td><span class="storage-badge">Published</span></td></tr>`).join('');
-  $('#export-button').disabled = !real.length;
+  $('#library-body').innerHTML = real.map(s => `<tr><td>${escape(fullDate(s.timestamp))}</td><td>${escape(s.realm)} · ${escape(s.faction)}</td><td>${escape(s.source)}</td><td class="number">${count(s.itemCount)}</td></tr>`).join('');
 }
 
 function openItem(key) {
@@ -156,7 +155,7 @@ function openItem(key) {
   $('#calc-buy').value = (i.minBuyout / 10000).toFixed(4);
   $('#calc-sell').value = (i.reference / 10000).toFixed(4);
   $('#calc-quantity').value = '1'; $('#calc-cut').value = '5'; $('#calc-expenses').value = '0';
-  $('#wowhead-link').href = `https://www.wowhead.com/classic/item=${i.itemId}`;
+  $('#item-reference-link').href = `https://www.wowhead.com/classic/item=${i.itemId}`;
   calculate(); $('#item-dialog').showModal();
 }
 function calculate() {
@@ -166,13 +165,8 @@ function calculate() {
     $('#calc-result').innerHTML = `<div><span>Potential ${net < 0 ? 'loss' : 'net gain'}</span><small>After ${money(fee)} in AH fees and entered costs</small></div><strong class="${net < 0 ? 'negative' : 'positive'}">${money(net)}</strong>`;
   } catch (e) { $('#calc-result').textContent = e.message; }
 }
-function download(name, body, type) {
-  const url = URL.createObjectURL(new Blob([body], {type}));
-  const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
 document.addEventListener('click', async event => {
   const t = event.target.closest('button,a'); if (!t) return;
-  if (t.matches('[data-guide]')) $('#help-dialog').showModal();
   if (t.dataset.item && !state.loading) openItem(t.dataset.item);
   if (t.dataset.watch && !state.loading) {
     const i = state.analysis.items.find(i => i.key === t.dataset.watch), key = watchKey(i);
@@ -193,20 +187,6 @@ $('#calculator-form').addEventListener('input', calculate);
 $('#calculator-form').addEventListener('submit', e => e.preventDefault());
 $('#help-button').addEventListener('click', () => $('#help-dialog').showModal());
 $('#opportunities-button').addEventListener('click', () => { state.rank = 'spread'; state.sort = 'spread'; state.descending = true; state.page = 0; renderLedger(); $('#ledger-panel').scrollIntoView({behavior:'auto',block:'start'}); });
-$('#export-button').addEventListener('click', async () => {
-  const button=$('#export-button');button.disabled=true;button.textContent='Preparing backup…';
-  try {
-    const snapshots=[];
-    for(let n=0;n<state.report.snapshots.length;n+=6) {
-      const batch=await Promise.all(state.report.snapshots.slice(n,n+6).map(async entry=>{
-        if(!/^data\/history\/[a-f0-9]{64}\.json$/.test(entry.file))throw new Error('Invalid archive reference.');
-        const response=await fetch(entry.file);if(!response.ok)throw new Error('Could not download the archive.');return response.json();
-      }));
-      snapshots.push(...batch);
-    }
-    download('scans.json',JSON.stringify({version:1,snapshots}),'application/json');
-  }catch(error){notify(error.message);}finally{button.disabled=false;button.textContent='Export ledger JSON ↓';}
-});
 document.addEventListener('keydown', e => { if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.target.matches('input,select,textarea') && !document.querySelector('dialog[open]')) { e.preventDefault(); if (state.view === 'library') location.hash = 'ledger'; $('#search').focus(); } });
 document.addEventListener('error', e => {
   const img = e.target;

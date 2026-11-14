@@ -59,7 +59,7 @@ Keep `.local/` private (directory mode 700; config/key mode 600). The deploy key
 - `data/reports/<sha256>.json`: precomputed 24h, 7d, 30d and all-history reports. Identical period results share a file.
 - `data/history.json` and `data/history/<sha256>.json`: sanitized snapshot archive. One file per snapshot avoids an ever-growing single Git file.
 
-Pages loads one market/period report at a time. It draws charts, filters/sorts displayed rows and keeps device-local watchlists. The optional interactive trade calculator performs only its small user-entered calculation in the browser. It does not recalculate scan analytics or download the full archive on startup. The library's JSON export downloads the complete archive only when requested.
+Pages loads one market/period report at a time. It draws charts, filters/sorts displayed rows and keeps device-local watchlists. The optional interactive trade calculator performs only its small user-entered calculation in the browser. It does not recalculate scan analytics or download the full archive on startup. The scan library is read-only. The local publisher handles updates, so there is no website JSON uploader or exporter. Back up `.local/publisher/history.json` on the PC.
 
 Metrics use every relevant observation. Item charts show at most 32 evenly spaced measured points; market charts show at most 365. The site labels sampling when applicable. These limits keep long histories practical on mobile. Complete observations remain in the archive. A report over 90 MiB is rejected rather than pushed as an oversized Git file.
 

@@ -8,4 +8,5 @@
 - [x] Deploy and verify the live GitHub Pages dashboard.
 - [x] Build a lightweight Forever scanner and test its output through the Rust publishing pipeline.
 - [x] Apply Classic WoW textures to the full website interface, including frames, trim and controls.
+- [x] Remove visible credits and branding, and retire manual website JSON controls.
 - [ ] Confirm the first live scan after enabling Auction Ledger Scanner in WoW.
