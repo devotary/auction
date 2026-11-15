@@ -16,9 +16,9 @@ cd /path/to/auction
 3. Run the publisher. It reports skipped files and whether anything changed.
 4. Open https://devotary.github.io/auction/ after GitHub Pages finishes deploying.
 
-Configure SavedVariables paths, the fallback faction for Auctionator markets, and the game timezone in ignored `.local/publisher/config.json`. The scanner and Auctioneer use their explicitly saved faction and timestamps.
+Configure SavedVariables paths, the fallback faction for Auctionator markets, and the game timezone in ignored `.local/publisher/config.json`. The scanner's file is optional until WoW first saves it. The scanner and Auctioneer use their explicitly saved faction and timestamps.
 
-The included [scanner addon](addon/README.md) captures observed listing quantities and prices using the Forever 1.60.1 replicate API. Its first live in-game scan still needs confirmation. Auctionator supplies existing prices and daily history. Auctioneer exports are also supported. No supply counts or sales are invented.
+The included [scanner addon](addon/README.md) captures observed listing quantities and prices using the Forever 1.60.1 replicate API. Auctionator supplies existing prices and daily history; Auctioneer exports are also supported. No supply counts or sales are invented.
 
 ## Preview and configuration
 
@@ -37,7 +37,7 @@ The launcher checks for Rust changes and rebuilds when needed. To build explicit
 cargo build --release --locked --manifest-path publisher/Cargo.toml
 ```
 
-For another installation, create this private config (absolute paths):
+Create `.local/publisher/config.json` with absolute paths for your installation. Set `timezone` to the game's timezone; the value below is an example.
 
 ```json
 {
