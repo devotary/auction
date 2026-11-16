@@ -20,6 +20,8 @@ For cross-house comparisons, scan the faction AH with `/ald scan faction` and th
 
 Configure the `AuctionLedger.lua` SavedVariables path in ignored `.local/publisher/config.json`. The scanner's file is optional until WoW first saves it. Its saved faction and timestamps identify each observation. Legacy input entries for other addons are skipped before their files are read.
 
+For a standard `WTF/Account/<account>/SavedVariables/AuctionLedger.lua` path, the publisher also discovers saved Ledger files under the other accounts in that same `Account` directory on every run. Changing WoW accounts needs no configuration change. Save the scan and `/reload` or log out on the account that scanned before publishing. The app reports how many scanner files it read; account and character names are not included in generated market data. Duplicate observations are merged, and realms and factions stay separate. For another game installation or a nonstandard layout, add its `AuctionLedger.lua` path as another input.
+
 The included [scanner addon](addon/README.md) captures observed listing quantities and prices using the Forever 1.60.1 replicate API. Auctionator cache, daily lows, Auctioneer exports and CSV/JSON inputs do not feed publishing. No supply counts or sales are invented. This does not change the addon's in-game Auctionator tooltip integration.
 
 ## Preview and configuration

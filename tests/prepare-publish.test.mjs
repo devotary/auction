@@ -23,6 +23,61 @@ const snap = (timestamp, realm = 'Realm', price = 100) => sanitizeSnapshot({
 const ledger = (realm='Realm', faction='Alliance', price=250) => `AuctionLedgerDB={version=1,scans={{status="saved",realm=${JSON.stringify(realm)},faction=${JSON.stringify(faction)},startedAt=1706745540,timestamp=1706745600,captured=1,received=1,variants={{itemId=13463,itemString="item:13463",name="Dreamfoil",classID=7}},rows={"1;5;${price*5};0;0;4"}}}}`;
 const emptyLedger = 'AuctionLedgerDB={version=1,scans={}}';
 
+async function accountFile(f, account, body) {
+  const folder=join(f.dir,'game','WTF','Account',account,'SavedVariables');
+  await mkdir(folder,{recursive:true});
+  const path=join(folder,'AuctionLedger.lua');
+  if(body!==undefined)await writeFile(path,body);
+  return path;
+}
+
+test('discovers saved scans across accounts without duplicate reads or account identifiers in output',async t=>{
+  const f=await fixture(t);
+  const one=await accountFile(f,'FIRST_TEST_ACCOUNT',ledger('Realm','Alliance'));
+  const two=await accountFile(f,'SECOND_TEST_ACCOUNT',ledger('Realm','Neutral',100));
+  const future=await accountFile(f,'FUTURE_TEST_ACCOUNT');
+  await writeFile(future+'.bak','not an active scan');
+  const elsewhere=join(f.dir,'other-game','WTF','Account','UNRELATED','SavedVariables');
+  await mkdir(elsewhere,{recursive:true});await writeFile(join(elsewhere,'AuctionLedger.lua'),'must not read another installation');
+  const originals=await Promise.all([one,two].map(async path=>({path,body:await readFile(path,'utf8'),mtime:(await stat(path)).mtimeMs})));
+  const args={config:{inputs:[{path:one}]},historyPath:f.historyPath,outputPath:f.outputPath};
+  const receipt=await prepare(args);
+  assert.equal(receipt.filesRead,2);assert.equal(receipt.imported,2);assert.equal(receipt.total,2);
+  let output=await readFile(f.outputPath,'utf8');
+  assert.doesNotMatch(output,/FIRST_TEST_ACCOUNT|SECOND_TEST_ACCOUNT|SavedVariables|WTF/);
+  assert.deepEqual(new Set(JSON.parse(output).snapshots.map(s=>s.faction)),new Set(['Alliance','Neutral']));
+  const explicit=await prepare({...args,config:{inputs:[{path:one},{path:two}]}});
+  assert.equal(explicit.filesRead,2);assert.equal(explicit.imported,2);assert.equal(explicit.total,2);
+  await writeFile(future,ledger('Other Realm','Horde',400));
+  const later=await prepare(args);
+  assert.equal(later.filesRead,3);assert.equal(later.total,3); // New accounts are discovered on the next run.
+  for(const original of originals){
+    assert.equal(await readFile(original.path,'utf8'),original.body);
+    assert.equal((await stat(original.path)).mtimeMs,original.mtime);
+  }
+});
+
+test('discovers other accounts when the configured optional scanner file is not yet saved',async t=>{
+  const f=await fixture(t);
+  const missing=await accountFile(f,'UNSAVED_TEST_ACCOUNT');
+  await accountFile(f,'SCANNED_TEST_ACCOUNT',ledger());
+  const receipt=await prepare({config:{inputs:[{path:missing,optional:true}]},historyPath:f.historyPath,outputPath:f.outputPath});
+  assert.equal(receipt.filesRead,1);assert.equal(receipt.total,1);
+  assert.match(receipt.warnings[0],/not saved yet/);
+});
+
+test('protects discovered source files and aborts atomically on a malformed account scan',async t=>{
+  const f=await fixture(t);
+  const one=await accountFile(f,'VALID_TEST_ACCOUNT',ledger());
+  const two=await accountFile(f,'INVALID_TEST_ACCOUNT','AuctionLedgerDB=os.execute("unsafe")');
+  const args={config:{inputs:[{path:one}]},historyPath:f.historyPath,outputPath:f.outputPath};
+  await assert.rejects(prepare({...args,outputPath:two}),/cannot replace an addon source/);
+  assert.equal(await readFile(two,'utf8'),'AuctionLedgerDB=os.execute("unsafe")');
+  await writeFile(f.outputPath,'preserve previous output');
+  await assert.rejects(prepare(args));
+  assert.equal(await readFile(f.outputPath,'utf8'),'preserve previous output');
+});
+
 test('imports without modifying addon source; merges sanitized snapshots and keeps markets isolated', async t => {
   const f = await fixture(t, [snap('2024-01-01T00:00:00Z')]);
   await mkdir(join(f.dir,'one')); await mkdir(join(f.dir,'two'));

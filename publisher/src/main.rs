@@ -188,8 +188,8 @@ fn execute() -> Result<()> {
     let summary = run(command)?;
     let receipt: serde_json::Value = serde_json::from_slice(&summary.stdout)?;
     println!(
-        "Read {} input observations; library contains {} snapshots.",
-        receipt["imported"], receipt["total"]
+        "Scanner files read: {}. Input observations: {}. Saved snapshots: {}.",
+        receipt["filesRead"], receipt["imported"], receipt["total"]
     );
     if let Some(warnings) = receipt["warnings"].as_array() {
         for warning in warnings {

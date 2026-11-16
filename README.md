@@ -13,7 +13,7 @@ cd /path/to/auction
 ./publish-auctions
 ```
 
-The publisher reads `AuctionLedger.lua` locally. Node.js safely decodes its saved data and merges sanitized Auction Ledger history. Rust calculates the reports. The app pushes only generated market data through the repository deploy key. Your original addon files and credentials stay on your PC.
+The publisher reads `AuctionLedger.lua` locally, including other accounts in the configured game installation's standard SavedVariables layout. After scanning on any account, use `/reload` or log out, then run the publisher. Node.js safely decodes saved data and merges sanitized Auction Ledger history. Rust calculates the reports. The app pushes only generated market data through the repository deploy key. Your original addon files and credentials stay on your PC.
 
 Click **Scan** on the Auction House window, or enter `/ald`, to open the scanner menu. It shows the detected house and offers **Scan current**. Unknown auctioneers need a manual Faction or Neutral choice; a saved manual scan teaches that NPC for next time. ALD supplies saved prices to Auctionator's existing **Auction** tooltip line, which updates on save. Auctionator handles coin icons, **Vendor** values, and Shift-hover stack totals. Only ALD needs to scan; publishing updates the website.
 

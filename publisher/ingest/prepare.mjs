@@ -1,5 +1,5 @@
-import { readFile, stat, writeFile, rename, rm } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, resolve } from 'node:path';
+import { readFile, readdir, stat, writeFile, rename, rm } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
 import { importLedger } from './importer.mjs';
@@ -20,12 +20,36 @@ async function readStable(path) {
 
 const isLedger = snapshot => snapshot?.source === 'Auction Ledger';
 
+async function accountInputs(configured) {
+  const inputs = new Map(configured.map(input => [resolve(input.path), {...input, path: resolve(input.path)}]));
+  const roots = new Set();
+  for (const path of inputs.keys()) {
+    const variables = dirname(path), root = dirname(dirname(variables));
+    if (basename(path) === 'AuctionLedger.lua' && basename(variables) === 'SavedVariables' && basename(root) === 'Account' && basename(dirname(root)) === 'WTF') roots.add(root);
+  }
+  for (const root of roots) {
+    let accounts;
+    try { accounts = await readdir(root, {withFileTypes: true}); }
+    catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+    for (const account of accounts.filter(entry => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
+      const path = join(root, account.name, 'SavedVariables', 'AuctionLedger.lua');
+      if (inputs.has(path)) continue;
+      try {
+        if (!(await stat(path)).isFile()) throw new Error('Discovered Auction Ledger input must be a regular file.');
+      } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+      inputs.set(path, {path, optional: true});
+    }
+  }
+  return [...inputs.values()];
+}
+
 export async function prepare({ config, historyPath, outputPath, remoteHistoryPath }) {
   if (!config || !Array.isArray(config.inputs) || !config.inputs.length) throw new Error('Config needs a nonempty inputs array.');
   if (config.inputs.some(input => !input || typeof input.path !== 'string' || !isAbsolute(input.path))) throw new Error('Each input needs an absolute file path.');
   if (!config.inputs.some(input => basename(input.path) === 'AuctionLedger.lua')) throw new Error('Config needs an AuctionLedger.lua input.');
   const output = resolve(outputPath);
-  const sources = config.inputs.map(input => resolve(input.path));
+  const inputs = await accountInputs(config.inputs);
+  const sources = inputs.map(input => input.path);
   if (sources.includes(output)) throw new Error('Output path cannot replace an addon source file.');
 
   Object.assign(catalog, JSON.parse(await readFile(new URL('./items.json', import.meta.url), 'utf8')));
@@ -51,9 +75,9 @@ export async function prepare({ config, historyPath, outputPath, remoteHistoryPa
   let snapshots = mergeSnapshots(remote.filter(isLedger), local.filter(isLedger));
   const warnings = [];
   if ([...remote, ...local].some(snapshot => !isLedger(snapshot))) warnings.push('Non-Auction Ledger history excluded from active reports.');
-  let importedCount = 0;
+  let importedCount = 0, filesRead = 0;
 
-  for (const [index, inputConfig] of config.inputs.entries()) {
+  for (const [index, inputConfig] of inputs.entries()) {
     const path = sources[index];
     if (basename(path) !== 'AuctionLedger.lua') {
       warnings.push(`Input ${index + 1}: skipped; publishing accepts only AuctionLedger.lua.`);
@@ -66,6 +90,7 @@ export async function prepare({ config, historyPath, outputPath, remoteHistoryPa
       throw error;
     }
     const incoming = importLedger(source);
+    filesRead++;
     if (!incoming.length) warnings.push(`Input ${index + 1}: no saved buyout observations yet. Complete a scan and /reload.`);
     importedCount += incoming.length;
     snapshots = mergeSnapshots(snapshots, incoming);
@@ -80,7 +105,7 @@ export async function prepare({ config, historyPath, outputPath, remoteHistoryPa
     await rm(temporary, { force: true });
     throw error;
   }
-  return { imported: importedCount, total: snapshots.length, warnings };
+  return { imported: importedCount, total: snapshots.length, filesRead, warnings };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
