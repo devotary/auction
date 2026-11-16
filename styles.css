@@ -162,7 +162,7 @@ tbody tr:nth-child(even) { background: #ffffff03; }
 .pagination { display: flex; align-items: center; gap: 8px; } .pagination button { font-size: 11px; }
 .empty-state { text-align: center; padding: 40px 20px; } .empty-state h3 { margin-bottom: 8px; } .empty-state p { color: var(--secondary); font-size: 12px; }
 .library-intro { padding: 16px 12px; max-width: 850px; color: var(--secondary); font-size: 13px; }
-.flip-controls { display: grid; grid-template-columns: minmax(180px,2fr) repeat(3,minmax(120px,1fr)); gap: 12px; padding: 16px 12px; }
+.flip-controls { display: grid; grid-template-columns: minmax(180px,2fr) repeat(4,minmax(0,1fr)); gap: 12px; padding: 16px 12px; }
 .flip-controls label { display: flex; flex-direction: column; gap: 4px; min-width: 0; color: var(--secondary); font-size: 11px; }
 .flip-controls input, .flip-controls select { width: 100%; min-width: 0; min-height: 44px; font-size: 12px; }
 .flip-controls label > :last-child { margin-top: auto; }
@@ -172,6 +172,7 @@ tbody tr:nth-child(even) { background: #ffffff03; }
 .flip-scans small { display: block; font-size: 11px; }
 .flip-route { color: var(--brass); font-size: 12px; }
 .flip-table td small { display: block; color: var(--secondary); font-size: 10px; margin-top: 4px; }
+.flip-table th:is([aria-sort=ascending],[aria-sort=descending]) button { color: #ffdc80; }
 .flip-note { max-width: 920px; font-size: 11px; }
 code { display: inline-block; padding: 0 4px; font: 11px ui-monospace,monospace; border-width: 3px; border-image-width: 3px; overflow-wrap: anywhere; }
 /* Dialogs are game windows; fields and calculated results share the inset treatment. */
@@ -221,6 +222,7 @@ dialog::backdrop { background: #000b; }
 }
 @media (max-width: 960px) {
   .flip-controls { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .flip-controls label:last-child { grid-column: 1 / -1; }
   .sidebar { width: 192px; padding: 16px 8px; } .shell { margin-left: 192px; }
   .brand { font-size: 16px; }
   .sidebar nav a { font-size: 11px; gap: 6px; padding: 3px 0; }

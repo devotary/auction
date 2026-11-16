@@ -7,8 +7,8 @@
   <meta name="description" content="A personal auction ledger for price history, trends, listed supply and potential resale margins.">
   <title>Auction Ledger</title>
   <link rel="icon" href="assets/icons/inv_misc_coin_01.jpg">
-  <link rel="stylesheet" href="styles.css?v=flips-1">
-  <script type="module" src="app.js?v=flips-1"></script>
+  <link rel="stylesheet" href="styles.css?v=flips-sort-1">
+  <script type="module" src="app.js?v=flips-sort-1"></script>
 </head>
 <body>
   <a class="skip" href="#main">Skip to market</a>
@@ -44,15 +44,16 @@
           <label>Realm & faction<select id="flip-market" aria-label="Flip realm and faction"></select></label>
           <label>Scan age<select id="flip-age"><option value="6">Within 6 hours</option><option value="24" selected>Within 24 hours</option><option value="48">Within 48 hours</option><option value="168">Within 7 days</option><option value="Infinity">Any age</option></select></label>
           <label><span>Min margin (gold / unit)</span><input id="flip-min" type="number" min="0" step="0.0001" value="0"></label>
-          <label>Sort by<select id="flip-sort"><option value="margin">Margin per unit</option><option value="roi">Return on cost</option><option value="buy">Lowest buy price</option><option value="name">Item name</option></select></label>
+          <label>Max return (%)<input id="flip-max" type="number" min="0" step="any" placeholder="No limit" title="Hide comparisons above this return percentage. Leave empty to show all returns."></label>
+          <label>Sort by<select id="flip-sort"><option value="margin:desc">Margin: high to low</option><option value="margin:asc">Margin: low to high</option><option value="roi:desc">Return: high to low</option><option value="roi:asc">Return: low to high</option><option value="buy:asc">Buy price: low to high</option><option value="buy:desc">Buy price: high to low</option><option value="name:asc">Item name: A–Z</option><option value="name:desc">Item name: Z–A</option></select></label>
         </div>
         <div class="flip-scans" id="flip-scans" aria-label="Compared scan times"></div>
         <div class="ledger-tabs" role="group" aria-label="Flip direction"><button data-flip-direction="all" aria-pressed="true">Both directions</button><button data-flip-direction="neutral-to-faction">Neutral → Faction</button><button data-flip-direction="faction-to-neutral">Faction → Neutral</button></div>
         <div class="ranking-explainer" id="flip-fees"></div>
-        <div class="table-scroll"><table class="flip-table"><thead><tr><th>Item</th><th>Buy → Sell</th><th class="number">Buy / unit</th><th class="number">Sell / unit</th><th class="number">Margin / unit</th><th class="number">Return on cost</th></tr></thead><tbody id="flip-body"></tbody></table></div>
+        <div class="table-scroll"><table class="flip-table"><thead><tr><th>Item</th><th>Buy → Sell</th><th class="number">Buy / unit</th><th class="number">Sell / unit</th><th class="number">Margin / unit</th><th class="number" aria-sort="none"><button id="flip-roi-sort" type="button">Return on cost <span aria-hidden="true">↕</span></button></th></tr></thead><tbody id="flip-body"></tbody></table></div>
         <div class="empty-state" id="flip-empty" role="status" hidden><h3></h3><p></p></div>
         <div class="table-footer"><p id="flip-summary"></p><div class="pagination"><button id="flip-previous" class="quiet">← Previous</button><span id="flip-page-label"></span><button id="flip-next" class="quiet">Next →</button></div></div>
-        <p class="panel-caption flip-note">Margin = destination unit price after its sale fee − buy price. Assumes resale at the observed minimum; excludes lost deposits, transfer costs and further undercutting. Availability and sales are unconfirmed. A low unit price may require buying a whole stack.</p>
+        <p class="panel-caption flip-note">Margin = destination unit price after its sale fee − buy price. Assumes resale at the observed minimum; excludes lost deposits, transfer costs and further undercutting. Availability and sales are unconfirmed. A lone overpriced listing can exaggerate returns; use Max return to hide comparisons above your chosen percentage. A low unit price may require buying a whole stack.</p>
       </section>
 
       <section class="panel" id="library-panel" hidden><div class="panel-heading"><h2>Saved scans</h2></div><div class="library-intro"><p>Scans are added automatically when you run the publisher.</p></div><div class="table-scroll"><table><thead><tr><th>Observed</th><th>Market</th><th>Source</th><th class="number">Items</th></tr></thead><tbody id="library-body"></tbody></table></div></section>

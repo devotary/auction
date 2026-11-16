@@ -15,7 +15,7 @@ const money = value => {
 const icon = i => `<img class="item-icon quality-${i.quality}" src="assets/icons/${escape(i.icon)}.jpg" data-fallback="${escape(i.icon)}" width="36" height="36" alt="" loading="lazy">`;
 const views = ['overview','ledger','watchlist','flips','library'];
 const state = {market:'', days:7, view:'overview', search:'', category:'', rank:'all', sort:'name', descending:false, page:0, current:null, report:null, loading:false,
-  flipReport:null, flipPair:'', flipDirection:'all', flipSearch:'', flipSort:'margin', flipMin:0, flipHours:24, flipPage:0};
+  flipReport:null, flipPair:'', flipDirection:'all', flipSearch:'', flipSort:'margin:desc', flipMin:0, flipMax:Infinity, flipHours:24, flipPage:0};
 const reportCache = new Map();
 let renderSequence = 0;
 let favorites;
@@ -180,9 +180,17 @@ function renderFlips() {
   let items = missing || stale ? [] : pair.items.filter(item =>
     (state.flipDirection === 'all' || item.direction === state.flipDirection) &&
     (!state.flipSearch || `${item.name} ${item.itemId}`.toLowerCase().includes(state.flipSearch.toLowerCase())) &&
-    item.margin >= state.flipMin * 10000);
-  const field = state.flipSort;
-  items.sort((a, b) => (field === 'name' ? a.name.localeCompare(b.name) : field === 'buy' ? a.buy - b.buy : b[field] - a[field]) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+    item.margin >= state.flipMin * 10000 && item.roi <= state.flipMax);
+  const [field, direction] = state.flipSort.split(':');
+  items.sort((a, b) => {
+    const order = field === 'name' ? a.name.localeCompare(b.name) : a[field] - b[field];
+    return (direction === 'desc' ? -order : order) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key);
+  });
+  $('#flip-sort').value = state.flipSort;
+  const returnSort = $('#flip-roi-sort');
+  returnSort.closest('th').setAttribute('aria-sort', field === 'roi' ? direction === 'desc' ? 'descending' : 'ascending' : 'none');
+  returnSort.setAttribute('aria-label', `Sort return on cost, ${state.flipSort === 'roi:desc' ? 'lowest' : 'highest'} first`);
+  returnSort.querySelector('span').textContent = field === 'roi' ? direction === 'desc' ? '↓' : '↑' : '↕';
   const size = 15, pages = Math.max(1, Math.ceil(items.length / size));
   state.flipPage = Math.min(state.flipPage, pages - 1);
   const visible = items.slice(state.flipPage * size, (state.flipPage + 1) * size);
@@ -193,7 +201,7 @@ function renderFlips() {
     return `<tr><td><a class="item-button" href="https://www.wowhead.com/classic/item=${item.itemId}" target="_blank" rel="noreferrer">${icon(item)}<span><span class="item-name">${escape(item.name)}</span><span class="item-meta">${escape(item.category)} · #${item.itemId}${item.key.includes(':v1:') ? ' · variant' : ''}</span></span></a></td><td class="flip-route">${route}</td><td class="number" data-label="Buy / unit">${money(item.buy)}</td><td class="number" data-label="Sell / unit">${money(item.sell)}</td><td class="number positive" data-label="Margin / unit">${money(item.margin)}<small>${item.feePercent}% sale fee included</small></td><td class="number" data-label="Return on cost">${percent(item.roi)}</td></tr>`;
   }).join('');
   $('#flip-empty').hidden = items.length > 0;
-  let title = 'No flips match these filters', explanation = 'Try another direction, a lower minimum margin, or a different item search.';
+  let title = 'No flips match these filters', explanation = 'Try another direction, a lower minimum margin, a higher return limit, or a different item search.';
   if (missing) {
     title = !pair?.neutralScan && pair?.factionScan ? 'Scan the Neutral Auction House' : !pair?.factionScan && pair?.neutralScan ? 'Scan your Faction Auction House' : 'Scan both Auction Houses';
     explanation = 'At the matching AH, use /ald scan faction or /ald scan neutral. Save, /reload, then run Auction Ledger Flips. Both scans must be on the same realm.';
@@ -212,7 +220,7 @@ function renderFlips() {
   }
   $('#flip-empty h3').textContent = title;
   $('#flip-empty p').textContent = explanation;
-  $('#flip-summary').textContent = `${count(pair?.matchedItems || 0)} shared item variants${items.length ? ` · showing ${state.flipPage * size + 1}–${Math.min((state.flipPage + 1) * size, items.length)} of ${count(items.length)}` : ''}`;
+  $('#flip-summary').textContent = `${count(pair?.matchedItems || 0)} shared item variants${items.length ? ` · showing ${state.flipPage * size + 1}–${Math.min((state.flipPage + 1) * size, items.length)} of ${count(items.length)}` : ''}${Number.isFinite(state.flipMax) ? ` · return capped at ${count(state.flipMax)}%` : ''}`;
   $('#flip-page-label').textContent = `${state.flipPage + 1} / ${pages}`;
   $('#flip-previous').disabled = state.flipPage === 0;
   $('#flip-next').disabled = state.flipPage === pages - 1;
@@ -264,8 +272,10 @@ $('#opportunities-button').addEventListener('click', () => { state.rank = 'sprea
 $('#flip-market').addEventListener('change', e => { state.flipPair = e.target.value; state.flipPage = 0; renderFlips(); });
 $('#flip-search').addEventListener('input', e => { state.flipSearch = e.target.value; state.flipPage = 0; renderFlips(); });
 $('#flip-min').addEventListener('input', e => { if (!e.target.checkValidity()) return; state.flipMin = Number(e.target.value); state.flipPage = 0; renderFlips(); });
+$('#flip-max').addEventListener('input', e => { if (!e.target.checkValidity()) return; state.flipMax = e.target.value === '' ? Infinity : Number(e.target.value); state.flipPage = 0; renderFlips(); });
 $('#flip-age').addEventListener('change', e => { state.flipHours = Number(e.target.value); state.flipPage = 0; renderFlips(); });
 $('#flip-sort').addEventListener('change', e => { state.flipSort = e.target.value; state.flipPage = 0; renderFlips(); });
+$('#flip-roi-sort').addEventListener('click', () => { state.flipSort = state.flipSort === 'roi:desc' ? 'roi:asc' : 'roi:desc'; state.flipPage = 0; renderFlips(); });
 $$('[data-flip-direction]').forEach(button => button.addEventListener('click', () => { state.flipDirection = button.dataset.flipDirection; state.flipPage = 0; renderFlips(); }));
 $('#flip-previous').addEventListener('click', () => { state.flipPage--; renderFlips(); });
 $('#flip-next').addEventListener('click', () => { state.flipPage++; renderFlips(); });
