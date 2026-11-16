@@ -13,4 +13,6 @@
 - [x] Confirm saved partial scans from Auction Ledger Scanner import correctly.
 - [x] Add separate Faction/Neutral scan controls and preserve the latest other-house scan.
 - [x] Publish directional cross-house margins to a mobile-compatible Flips tab using the existing local pipeline.
+- [x] Recognize reference auctioneers, remember saved manual house choices, and add separate ALD item-tooltip prices.
 - [ ] Verify the first paired Faction and Neutral scans using the updated in-game buttons.
+- [ ] Verify automatic house recognition and both ALD tooltip price lines in the Forever client.
