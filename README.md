@@ -15,7 +15,7 @@ cd /path/to/auction
 
 The publisher reads the addon files locally. Node.js safely decodes their saved data and merges sanitized history. Rust calculates the reports. The app pushes only generated market data through the repository deploy key. Your original addon files and credentials stay on your PC.
 
-`/ald` shows the detected house and offers **Scan current**. Unknown auctioneers need a manual Faction or Neutral choice; a saved manual scan teaches that NPC for next time. Saved ALD scans also add separate Faction and Neutral unit prices, with scan age, alongside Auctionator's item-tooltip prices. Those in-game lines update immediately on save; publishing updates the website.
+Click **Scan** on the Auction House window, or enter `/ald`, to open the scanner menu. It shows the detected house and offers **Scan current**. Unknown auctioneers need a manual Faction or Neutral choice; a saved manual scan teaches that NPC for next time. ALD supplies saved prices to Auctionator's existing **Auction** tooltip line, which updates on save. Auctionator handles coin icons, **Vendor** values, and Shift-hover stack totals. Only ALD needs to scan; publishing updates the website.
 
 The site is static GitHub Pages. It needs no running server, database, port forwarding, or Tailscale. Once the push and Pages deployment finish, your PC can be off.
 

@@ -6,7 +6,7 @@ Auction Ledger Scanner is a small, read-only addon for WoW Forever 1.60.1 (`Inte
 
 Copy the `AuctionLedger` folder from this directory into the Forever client’s `Interface/AddOns/` folder. This installs a new addon folder; it does not replace or edit your existing addons. No account IDs or account-folder paths are needed in addon settings.
 
-Open the Auction House, then enter:
+Open the Auction House and click **Scan** in its bottom-right tab strip to open the ALD menu. The menu contains **Scan current**, Faction/Neutral selection, **Stop and Save**, and **Cancel**. You can also open it with `/ald`, or start a recognized house directly with:
 
 ```text
 /ald scan
@@ -42,12 +42,14 @@ Every scan is marked **partial**. A quiet list for 15 seconds is a settling heur
 
 ## Item tooltips
 
-When hovering an observed item, ALD adds **Faction / unit** and **Neutral / unit** prices to the same item tooltip used by Auctionator. Each line identifies ALD and shows its scan age and capture coverage. The source is the latest retained ALD scan for that house on the current realm; item variants must match exactly. Unobserved variants, other realms and the opposing faction's scans are excluded.
+Keep Auctionator enabled for its tooltip interface. ALD supplies saved prices to Auctionator's existing **Auction** line; it does not add separate ALD tooltip lines. You only need ALD to scan. Auctionator retains its own coin formatting, **Vendor** line, localization and tooltip settings. Normal hover shows one unit; holding Shift over a stack shows the whole stack's Auction and Vendor totals. ALD enables Auctionator's existing Shift-for-stack setting.
 
-Prices update as soon as a scan is saved, including **Stop and Save**. No publisher run or reload is needed for that in-game update. Reloading is still needed to write scans for desktop publishing. After login or reload, saved rows are indexed in small frame-budgeted batches before their prices are shown.
+The price source is the latest retained ALD scan for the current realm and house, matching the exact item variant. At a recognized Neutral AH, Auctionator shows the Neutral price; outside the AH it uses the player's Faction price. An unobserved Faction item uses Auctionator's normal fallback. An unobserved Neutral item shows Unknown instead of substituting a Faction price. The website still compares both houses separately.
 
-These are separate ALD lines alongside Auctionator's existing price. Auctionator's database and own price line are not overwritten. The integration uses Blizzard's [native item-tooltip callbacks](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_SharedXMLGame/Tooltip/TooltipDataHandler.lua), works without Auctionator too, and stores no tooltip or inventory history.
+Prices update as soon as a scan is saved, including **Stop and Save**. No publisher run or reload is needed for that in-game update. Reloading is still needed to write scans for desktop publishing. After login or reload, saved rows are indexed in small frame-budgeted batches before their prices are used. These are partial observations and may miss cheaper listings. Auctionator's optional age display uses its usual whole-day buckets.
+
+The bridge delegates to Auctionator's renderer and supplies its price/age lookups only during that item-tooltip render. It does not rewrite Auctionator's files or persistent cache, and unrelated price lookups remain unchanged. Historical averages still come from Auctionator; Faction averages are suppressed at the Neutral AH. The adapter is checked against installed Auctionator version 347 and guards the required runtime interfaces. ALD scanning and publishing also work with Auctionator disabled, but ALD supplies no standalone tooltip renderer.
 
 NPC recognition uses Classic reference identities: neutral Beardo (8661), Grizzlin (9857), Kresky (9858), Graves (15677), and O'reely (15681), plus the common auctioneers in each faction capital. See the [auctioneer location reference](https://warcraft.wiki.gg/wiki/Auctioneer). NPC identity comes from the interacting `npc` unit's [UnitGUID](https://github.com/Gethe/wow-ui-source/blob/forever/Interface/AddOns/Blizzard_APIDocumentationGenerated/UnitDocumentation.lua); full GUIDs are never saved. Manual choices store only the NPC type ID and house label.
 
-After updating, verify each house in game: confirm the detected label and saved rows, hover an observed item to check the ALD price lines, reload, and make sure the publisher imports both snapshots. Automated tests cover recognition, remembered choices, tooltip updates and the scan/import/report pipeline; the new client-facing behavior still needs this in-game check.
+After updating, verify each house in game: confirm the detected label and saved rows, hover an observed item to check Auctionator's Auction price, and hold Shift over a stack to check both totals. Reload and make sure the publisher imports both snapshots. Automated tests cover recognition, remembered choices, the Auctionator bridge and the scan/import/report pipeline; the new client-facing behavior still needs this in-game check.

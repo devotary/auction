@@ -3,7 +3,7 @@ local function equal(actual, expected)
     assert(actual == expected, tostring(actual) .. " ~= " .. tostring(expected))
 end
 local function harness(previous)
-    local h = {clock = 0, npc = 8670, frames = {}, rows = {}, requests = 0, reads = 0, loads = 0, messages = {}}
+    local h = {clock = 0, npc = 8670, frames = {}, creations = {}, rows = {}, requests = 0, reads = 0, loads = 0, messages = {}, config = {shift_stack_tooltips = false}}
     local function object()
         local obj = {scripts = {}, registered = {}, enabled = true}
         function obj:SetScript(name, fn) self.scripts[name] = fn end
@@ -12,13 +12,14 @@ local function harness(previous)
         function obj:SetText(text) self.text = text end
         function obj:Enable() self.enabled = true end
         function obj:Disable() self.enabled = false end
+        function obj:Show() self.shown = true end
         return setmetatable(obj, {__index = function() return function() end end})
     end
     local env = setmetatable({AuctionLedgerDB = previous, SlashCmdList = {}, UIParent = {}}, {__index = _G})
     env._G = env
-    env.CreateFrame = function(_, name)
-        local obj = object(); obj.TitleText = object()
-        if name then h.frames[name] = obj end
+    env.CreateFrame = function(_, name, parent)
+        local obj = object(); obj.TitleText = object(); obj.parent = parent
+        if name then h.frames[name] = obj; env[name] = obj; h.creations[name] = (h.creations[name] or 0) + 1 end
         return obj
     end
     env.print = function(message) h.messages[#h.messages + 1] = message end
@@ -32,10 +33,28 @@ local function harness(previous)
         return h.npc and ("Creature-0-1-0-0-" .. h.npc .. "-000001") or nil
     end
     env.Enum = {TooltipDataType = {Item = 0}}
-    env.TooltipDataProcessor = {AddTooltipPostCall = function(kind, callback)
-        equal(kind, 0); h.tooltipCallback = callback
-    end}
-    env.GetCoinTextureString = function(price) return price .. "c" end
+    env.TooltipDataProcessor = {AddTooltipPostCall = function() error("ALD must not register a separate tooltip renderer") end}
+    env.Auctionator = {
+        Constants = {SCAN_DAY_0 = 1577836800},
+        Config = {Options = {SHIFT_STACK_TOOLTIPS = "shift_stack_tooltips"},
+            Get = function(key) return h.config[key] end, Set = function(key, value) h.config[key] = value end},
+        Database = {GetFirstPrice = function() return 777 end, GetPriceAge = function() return 42 end,
+            GetMeanPrice = function() return 888 end},
+        Tooltip = {},
+    }
+    -- Fake only the renderer contract: native price lookup, native quantity setting, native vendor data.
+    env.Auctionator.Tooltip.ShowTipWithPricingDBKey = function(tip, keys, link, count)
+        if h.rendererError then error("native renderer failed") end
+        local db = env.Auctionator.Database
+        local amount = h.shift and h.config.shift_stack_tooltips and count or 1
+        local price = db:GetFirstPrice(keys)
+        h.lastPrice, h.lastAge, h.lastMean = price, db:GetPriceAge(keys[1]), db:GetMeanPrice(keys[1], 14)
+        h.unrelatedPrice = db:GetFirstPrice({"other-item"})
+        local suffix = amount > 1 and " x" .. amount or ""
+        tip:AddDoubleLine("Vendor" .. suffix, 360 * amount .. "c")
+        tip:AddDoubleLine("Auction" .. suffix, price and price * amount .. "c" or "Unknown")
+        return "native-result", nil, "tail"
+    end
     env.GetBuildInfo = function() return "1.60.1", "70888", "", 16001 end
     env.C_Item = {
         GetItemInfoInstant = function() return 13463, "", "", "", 1, 7, 0 end,
@@ -59,11 +78,11 @@ local function harness(previous)
         GetReplicateItemTimeLeft = function() return 4 end,
     }
     local namespace = {}
-    for _, name in ipairs({"AuctionLedger.lua", "Tooltip.lua"}) do
+    for _, name in ipairs({"AuctionLedger.lua", "AuctionatorBridge.lua"}) do
         local chunk = assert(loadfile("addon/AuctionLedger/" .. name))
         setfenv(chunk, env); chunk("AuctionLedger", namespace)
     end
-    h.env, h.frame = env, h.frames.AuctionLedgerEvents
+    h.env, h.frame, h.ald = env, h.frames.AuctionLedgerEvents, namespace
     function h:event(name, ...) self.frame.scripts.OnEvent(self.frame, name, ...) end
     function h:command(text) self.env.SlashCmdList.AUCTIONLEDGER(text) end
     function h:advance(seconds)
@@ -75,8 +94,8 @@ local function harness(previous)
             end
         end
     end
-    function h:tooltip(link)
-        local tip = {lines = {}, data = {}, link = link}
+    function h:tooltip(link, count)
+        local tip = {lines = {}, data = {}, link = link, count = count or 1}
         function tip:GetItem() return "Dreamfoil", self.link end
         function tip:GetName() return "GameTooltip" end
         function tip:NumLines() return #self.lines end
@@ -89,13 +108,15 @@ local function harness(previous)
         end
         function tip:RebuildFromTooltipInfo()
             self.lines = {}
-            self:AddDoubleLine("Auctionator Auction", "777c")
-            h.tooltipCallback(self, self.data)
+            local id = self.link and self.link:match("item:(%d+)")
+            if id and env.Auctionator then return env.Auctionator.Tooltip.ShowTipWithPricingDBKey(self, {id}, self.link, self.count) end
         end
         env.GameTooltip = tip; tip:RebuildFromTooltipInfo()
         return tip
     end
     h:event("ADDON_LOADED", "AuctionLedger")
+    env.AuctionHouseFrame = object()
+    h:event("ADDON_LOADED", "Blizzard_AuctionHouseUI")
     h:event("AUCTION_HOUSE_SHOW")
     return h
 end
@@ -290,57 +311,87 @@ equal(#changedNPC.env.AuctionLedgerDB.scans, 0)
 local prices = harness({version = 1, scans = {saved, success.env.AuctionLedgerDB.scans[2], neutral.env.AuctionLedgerDB.scans[1]}})
 prices.clock = 2000
 local baseLink = "|cffffffff|Hitem:13463:0:0:0:0:0:0:999:50:0|h[Dreamfoil]|h|r"
-local tip = prices:tooltip(baseLink)
-equal(#tip.lines, 1) -- No incomplete index is presented as the minimum price.
+local tip = prices:tooltip(baseLink, 9)
+equal(#tip.lines, 2); equal(tip.lines[2].right, "777c") -- Native fallback while indexing.
 prices:advance(0.05)
-equal(#tip.lines, 3)
-equal(tip.lines[1].left, "Auctionator Auction"); equal(tip.lines[1].right, "777c")
-assert(tip.lines[2].left:find("ALD Faction / unit", 1, true)); equal(tip.lines[2].right, "1000c")
-assert(tip.lines[3].left:find("ALD Neutral / unit", 1, true)); equal(tip.lines[3].right, "500c")
-assert(tip.lines[2].left:find("partial", 1, true))
-assert(tip.lines[2].left:match("%(%d+m, partial%)"))
-prices.tooltipCallback(tip, tip.data); equal(#tip.lines, 3) -- Repeated callbacks do not duplicate lines.
+equal(#tip.lines, 2); equal(tip.lines[1].left, "Vendor"); equal(tip.lines[2].left, "Auction")
+equal(tip.lines[2].right, "1000c"); equal(prices.lastAge, 0)
+equal(prices.unrelatedPrice, 777) -- Other lookups inside rendering do not receive this item's price.
+equal(prices.env.Auctionator.Database:GetFirstPrice({"13463"}), 777) -- No database/context pollution.
+equal(prices.env.Auctionator.Database:GetPriceAge("13463"), 42)
+equal(prices.config.shift_stack_tooltips, true)
+prices.shift = true; tip:RebuildFromTooltipInfo()
+equal(tip.lines[1].left, "Vendor x9"); equal(tip.lines[1].right, "3240c")
+equal(tip.lines[2].left, "Auction x9"); equal(tip.lines[2].right, "9000c")
+prices.shift = false; tip:RebuildFromTooltipInfo()
+equal(tip.lines[2].right, "1000c")
+prices.npc = 8661; prices:event("AUCTION_HOUSE_SHOW")
+equal(tip.lines[2].right, "500c"); equal(prices.lastMean, nil) -- Neutral price, no faction historical mean.
+prices:event("AUCTION_HOUSE_CLOSED")
+equal(tip.lines[2].right, "1000c"); equal(prices.lastMean, 888) -- Faction outside the AH.
+prices:event("AUCTION_HOUSE_SHOW") -- Neutral remains detected until a manual Faction choice.
+prices.npc = 8670; prices:event("AUCTION_HOUSE_SHOW")
 local variantLink = "|Hitem:13463:0:0:0:0:0:-18:1:60:0|h[Different variant]|h"
-equal(#prices:tooltip(variantLink).lines, 1) -- A base price is not applied to an unobserved variant.
+equal(prices:tooltip(variantLink).lines[2].right, "777c") -- Unobserved variant uses native fallback, not ALD base price.
 tip = prices:tooltip(baseLink)
 prices.rows = {{buyout = 30000, count = 10}, {pending = true}}
 prices:command("scan faction"); prices:event("REPLICATE_ITEM_LIST_UPDATE"); prices:advance(1)
 prices:command("save")
-equal(#tip.lines, 3); equal(tip.lines[2].right, "3000c"); equal(tip.lines[3].right, "500c") -- Immediate update, no reload/publisher needed.
+equal(#tip.lines, 2); equal(tip.lines[2].right, "3000c") -- Native Auction row updates immediately.
 prices:advance(901); prices.rows = {{buyout = 1, count = 1}}
 prices:command("scan faction"); prices:command("cancel")
 equal(prices:tooltip(baseLink).lines[2].right, "3000c")
+prices.rendererError = true
+assert(not pcall(function() prices:tooltip(baseLink) end))
+equal(prices.env.Auctionator.Database:GetFirstPrice({"13463"}), 777) -- Error path restores context.
+prices.rendererError = false
+tip = prices:tooltip(baseLink)
+local first, middle, last = tip:RebuildFromTooltipInfo()
+equal(first, "native-result"); equal(middle, nil); equal(last, "tail")
 
 local bigScan = {status = "saved", realm = "Tést Realm", faction = "Alliance", timestamp = 1793534400, coverage = "partial",
     variants = {{itemString = "item:13463"}}, rows = {}}
 for n = 1, 3000 do bigScan.rows[n] = "1;1;1000;0;0;0" end
 bigScan.rows[3000] = "1;1;5;0;0;0"
 local indexed = harness({version = 1, scans = {bigScan}})
-tip = indexed:tooltip(baseLink); indexed:advance(0.05); equal(#tip.lines, 1)
+tip = indexed:tooltip(baseLink); indexed:advance(0.05); equal(tip.lines[2].right, "777c")
 indexed:advance(0.2); equal(#tip.lines, 2); equal(tip.lines[2].right, "5c")
-tip.link = nil; tip:RebuildFromTooltipInfo(); equal(#tip.lines, 1)
+tip.link = nil; tip:RebuildFromTooltipInfo(); equal(#tip.lines, 0)
 
 local foreign = harness({version = 1, scans = {{status = "saved", realm = "Other Realm", faction = "Neutral", timestamp = 1793534400,
     variants = {{itemString = "item:13463"}}, rows = {"1;1;1;0;0;0"}},
     {status = "saved", realm = "Tést Realm", faction = "Horde", timestamp = 1793534400,
     variants = {{itemString = "item:13463"}}, rows = {"1;1;1;0;0;0"}}}})
-foreign:advance(0.1); equal(#foreign:tooltip(baseLink).lines, 1)
+foreign:advance(0.1); equal(foreign:tooltip(baseLink).lines[2].right, "777c")
+foreign.npc = 8661; foreign:event("AUCTION_HOUSE_SHOW")
+equal(foreign.env.GameTooltip.lines[2].right, "Unknown") -- Never substitute faction cache for an unscanned Neutral house.
 
 local login = harness({version = 1, scans = {saved}})
 login.env.UnitFactionGroup = function() return nil end
-login:event("ADDON_LOADED", "AuctionLedger"); login:advance(0.1)
-tip = login:tooltip(baseLink); equal(#tip.lines, 1)
+login:event("AUCTION_HOUSE_CLOSED"); login:event("ADDON_LOADED", "AuctionLedger"); login:advance(0.1)
+tip = login:tooltip(baseLink); equal(tip.lines[2].right, "777c")
 login.env.UnitFactionGroup = function() return "Alliance" end
 login:event("PLAYER_LOGIN"); login:advance(0.1)
-equal(#tip.lines, 2); equal(tip.lines[2].right, "1000c")
+equal(tip.lines[2].right, "1000c")
 login.env.issecretvalue = function(value) return value == baseLink end
-tip:RebuildFromTooltipInfo(); equal(#tip.lines, 1)
+tip:RebuildFromTooltipInfo(); equal(tip.lines[2].right, "777c")
 
 local variants = harness()
 variants.rows = {{}, {link = variantLink, buyout = 10000}}
 variants:command("scan"); variants:event("REPLICATE_ITEM_LIST_UPDATE"); variants:advance(16)
 equal(variants:tooltip(baseLink).lines[2].right, "1000c")
 equal(variants:tooltip(variantLink).lines[2].right, "500c")
+
+local menu = harness()
+equal(menu.frames.AuctionLedgerAHScanButton.text, "Scan")
+equal(menu.frames.AuctionLedgerWindow, nil)
+menu.frames.AuctionLedgerAHScanButton.scripts.OnClick()
+equal(menu.frames.AuctionLedgerWindow.shown, true)
+equal(menu.frames.AuctionLedgerAHScanButton.parent, menu.env.AuctionHouseFrame)
+menu:event("AUCTION_HOUSE_SHOW"); menu:event("ADDON_LOADED", "Blizzard_AuctionHouseUI")
+equal(menu.creations.AuctionLedgerAHScanButton, 1)
+menu.env.Auctionator = nil; menu:event("PLAYER_LOGIN") -- Scanner stays usable without Auctionator; no own tooltip rows.
+equal(#menu:tooltip(baseLink).lines, 0)
 
 local function literal(value)
     if type(value) == "string" then return string.format("%q", value) end
@@ -360,4 +411,5 @@ if arg[3] then
     local paired = {version = 1, scans = {success.env.AuctionLedgerDB.scans[1], success.env.AuctionLedgerDB.scans[2], neutral.env.AuctionLedgerDB.scans[1]}}
     local file = assert(io.open(arg[3], "wb")); file:write("AuctionLedgerDB = " .. literal(paired)); file:close()
 end
-print("PASS: streaming, metadata, stop-and-save, cooldown, house detection and learning, cross-house retention, item tooltip prices and ages, exact variants, bounded indexing, immediate updates, cancellation and private fields")
+print("PASS: streaming, stop-and-save, house detection, cross-house retention, native Auctionator pricing and stack/vendor totals, exact variants, bounded indexing, immediate updates, AH Scan button, cancellation and private fields")
+return harness

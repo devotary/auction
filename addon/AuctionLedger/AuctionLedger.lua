@@ -46,6 +46,10 @@ local function detectHouse()
     if remembered == "Neutral" then return "Neutral", "remembered choice" end
     return auctioneers[id], "auctioneer identity"
 end
+function ALD.CurrentHouse()
+    if auctionOpen then return job and job.faction or detectHouse() end
+    return UnitFactionGroup("player")
+end
 local function readyWindow()
     if not autoButton or job then return end
     local house, source = detectHouse()
@@ -243,6 +247,7 @@ local function start(mode)
     if scanButton then scanButton:Disable(); neutralButton:Disable(); autoButton:Disable(); saveButton:Disable(); cancelButton:Enable() end
     status(faction .. " AH: waiting for the server's auction list…\nThis can take several minutes. Keep the AH open.")
     say(faction .. " AH scan requested. This reads the currently open AH; make sure you chose the matching house.")
+    if ALD.RefreshAuctionator then ALD.RefreshAuctionator() end
     events:SetScript("OnUpdate", function(_, elapsed)
         elapsedSincePoll = elapsedSincePoll + elapsed
         if elapsedSincePoll < 0.05 then return end
@@ -285,17 +290,30 @@ local function showWindow()
     window:Show()
 end
 
+local function addScanButton()
+    if not AuctionHouseFrame or AuctionLedgerAHScanButton then return end
+    local button = CreateFrame("Button", "AuctionLedgerAHScanButton", AuctionHouseFrame, "UIPanelButtonTemplate")
+    button:SetSize(88, 24)
+    button:SetText("Scan")
+    button:SetPoint("BOTTOMRIGHT", AuctionHouseFrame, "BOTTOMRIGHT", -20, -28)
+    button:SetScript("OnClick", showWindow)
+end
+
 events:RegisterEvent("ADDON_LOADED")
 events:RegisterEvent("PLAYER_LOGIN")
 events:RegisterEvent("AUCTION_HOUSE_SHOW")
 events:RegisterEvent("AUCTION_HOUSE_CLOSED")
 events:RegisterEvent("REPLICATE_ITEM_LIST_UPDATE")
 events:SetScript("OnEvent", function(_, event, name)
-    if event == "ADDON_LOADED" and name == "AuctionLedger" then database(); if ALD.RefreshPrices then ALD.RefreshPrices() end
-    elseif event == "PLAYER_LOGIN" then if ALD.RefreshPrices then ALD.RefreshPrices() end
-    elseif event == "AUCTION_HOUSE_SHOW" then auctionOpen = true; readyWindow()
+    if event == "ADDON_LOADED" then
+        addScanButton()
+        if name == "AuctionLedger" then database(); if ALD.RefreshPrices then ALD.RefreshPrices() end end
+        if name == "Auctionator" and ALD.InstallAuctionatorBridge then ALD.InstallAuctionatorBridge() end
+    elseif event == "PLAYER_LOGIN" then addScanButton(); if ALD.RefreshPrices then ALD.RefreshPrices() end
+    elseif event == "AUCTION_HOUSE_SHOW" then
+        auctionOpen = true; addScanButton(); readyWindow(); if ALD.RefreshAuctionator then ALD.RefreshAuctionator() end
     elseif event == "AUCTION_HOUSE_CLOSED" then
-        auctionOpen = false; finish("Auction House closed during capture", false); readyWindow()
+        auctionOpen = false; finish("Auction House closed during capture", false); readyWindow(); if ALD.RefreshAuctionator then ALD.RefreshAuctionator() end
     elseif event == "REPLICATE_ITEM_LIST_UPDATE" and job then
         if not job.gotEvent then
             local db = database()
