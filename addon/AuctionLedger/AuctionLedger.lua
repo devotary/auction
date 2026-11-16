@@ -1,7 +1,8 @@
 -- One user-triggered replicate request; no trading, libraries or background scans.
 local _, ALD = ...
 local WAIT, RESOLVE, QUIET, COOLDOWN = 900, 90, 15, 900
-local MAX_ROWS, MAX_BYTES, KEEP_BYTES = 250000, 24 * 1024 * 1024, 48 * 1024 * 1024
+-- Conservative storage estimates; keep headroom below the desktop importer's 64 MiB input limit.
+local MAX_ROWS, MAX_BYTES, KEEP_BYTES = 250000, 48 * 1024 * 1024, 56 * 1024 * 1024
 local events = CreateFrame("Frame", "AuctionLedgerEvents")
 local job, window, label, scanButton, neutralButton, autoButton, saveButton, cancelButton
 local auctionOpen = false
@@ -91,6 +92,8 @@ local function finish(reason, save)
             api = "replicate", gameVersion = version, build = build, interface = interface,
             reason = reason, received = current.total, captured = #current.rows,
             unresolved = current.total - #current.rows,
+            unread = math.max(0, current.total - current.nextRow),
+            pendingItemData = current.pendingCounts.item, pendingAuctionData = current.pendingCounts.details,
             estimatedBytes = current.bytes, variants = current.variants, rows = current.rows,
         }
         db.scans[#db.scans + 1] = scan
@@ -115,7 +118,7 @@ local function finish(reason, save)
         end
         if ALD.RefreshPrices then ALD.RefreshPrices(scan, current.prices) end
         if autoButton then if detectHouse() then autoButton:Enable() else autoButton:Disable() end end
-        local message = ("%s AH: saved %d of %d rows (%d unresolved). Coverage: partial.\nUse /reload, then run the desktop publisher."):format(scan.faction, #scan.rows, scan.received, scan.unresolved)
+        local message = ("%s AH: saved %d of %d rows (%d unresolved). Coverage: partial.\n%s\nUse /reload, then run the desktop publisher."):format(scan.faction, #scan.rows, scan.received, scan.unresolved, reason)
         status(message); say(message:gsub("\n", " "))
     else
         status(reason .. "\nPrevious scans kept.")
@@ -132,22 +135,37 @@ local function stopAndSave()
     finish("Stopped early by user", true)
 end
 
+local function pendingRow(index, reason, itemID)
+    local previous = job.pending[index]
+    if previous ~= reason then
+        if previous then job.pendingCounts[previous] = job.pendingCounts[previous] - 1 end
+        job.pendingCounts[reason] = job.pendingCounts[reason] + 1
+        job.pending[index] = reason
+    end
+    if type(itemID) ~= "number" or itemID < 1 then return end
+    local indices = job.byItem[itemID]
+    if not indices then indices = {}; job.byItem[itemID] = indices end
+    indices[index] = true
+    if not job.requested[itemID] and (job.attempts[itemID] or 0) < 3 and C_Item and C_Item.RequestLoadItemDataByID then
+        job.requested[itemID] = true
+        job.attempts[itemID] = (job.attempts[itemID] or 0) + 1
+        local ok = pcall(C_Item.RequestLoadItemDataByID, itemID)
+        if not ok then job.requested[itemID] = nil end
+    end
+end
+
 local function readRow(index)
     local api = C_AuctionHouse
     local name, texture, count, quality, usable, level, levelType, minBid, increment,
         buyout, bid, highBidder, bidder, owner, ownerFullName, saleStatus, itemID = api.GetReplicateItemInfo(index)
     -- Names of sellers/bidders are never put in any table or SavedVariables.
-    if type(itemID) ~= "number" or itemID < 1 or type(count) ~= "number" or count < 1
-        or type(buyout) ~= "number" or buyout < 0 then return false end
     local key = variant(api.GetReplicateItemLink(index))
-    if not key then
-        if not job.requested[itemID] and C_Item and C_Item.RequestLoadItemDataByID then
-            job.requested[itemID] = true
-            C_Item.RequestLoadItemDataByID(itemID)
-        end
-        return false
-    end
-    if #key > 2048 then return false end
+    local linkID = key and tonumber(key:match("^item:(%d+)"))
+    if type(itemID) ~= "number" or itemID < 1 then itemID = linkID end
+    if not key then return false, "item", itemID end
+    if not linkID or linkID < 1 or linkID > 1e9 or linkID ~= itemID or #key > 2048
+        or type(count) ~= "number" or count < 1 or count > 1e9 or count % 1 ~= 0
+        or type(buyout) ~= "number" or buyout < 0 or buyout > 1e14 or buyout % 1 ~= 0 then return false, "details", itemID end
     local id = job.byVariant[key]
     if not id then
         local itemClass
@@ -170,7 +188,8 @@ local function readRow(index)
     if buyout > 0 then job.prices[key] = math.min(job.prices[key] or math.huge, buyout / count) end
     if saveButton and #job.rows == 1 then saveButton:Enable() end
     job.bytes = job.bytes + #row + 64
-    job.lastProgress = GetTime()
+    local reason = job.pending[index]
+    if reason then job.pendingCounts[reason] = job.pendingCounts[reason] - 1; job.pending[index] = nil end
     return true
 end
 
@@ -184,11 +203,13 @@ local function step()
     end
     local total = C_AuctionHouse.GetNumReplicateItems() or 0
     if total < job.total then finish("The replicate list changed during capture; scan again later.", false); return end
-    if total > MAX_ROWS then finish("The returned list exceeds the 250,000-row safety limit.", false); return end
+    if total > MAX_ROWS then
+        job.total = total
+        finish("Returned list exceeds 250,000 rows; captured rows kept as a partial scan", #job.rows > 0); return
+    end
     if total > job.total then
         -- Replicate indices are zero-based. Newly streamed rows join the current pass.
-        for index = job.total, total - 1 do job.queue[#job.queue + 1] = index end
-        job.total, job.lastGrowth = total, now
+        job.total, job.lastGrowth, job.tailSince = total, now, nil
     end
     if total == 0 then
         if now - job.began > WAIT then finish("No auction rows returned.", false) end
@@ -196,28 +217,47 @@ local function step()
     end
     local began = debugprofilestop and debugprofilestop() or 0
     local processed = 0
-    if now >= job.nextPass then
-        while job.cursor <= #job.queue and processed < 400 do
-            local index = job.queue[job.cursor]
-            if not readRow(index) then job.retry[#job.retry + 1] = index end
-            job.cursor, processed = job.cursor + 1, processed + 1
-            if job.bytes > MAX_BYTES then finish("Capture exceeded the local file-size safety budget.", false); return end
-            if debugprofilestop and debugprofilestop() - began > 3 then break end
+    while processed < 400 do
+        local index, retry, fresh
+        if job.urgentCursor <= #job.urgent then
+            index = job.urgent[job.urgentCursor]
+            job.urgentCursor = job.urgentCursor + 1; job.urgentQueued[index] = nil
+        elseif job.nextRow < total then
+            index, fresh, retry = job.nextRow, true, true
+            job.nextRow = job.nextRow + 1
+        elseif now >= job.nextPass and job.cursor <= #job.queue then
+            index, retry = job.queue[job.cursor], true
+            job.cursor = job.cursor + 1
+        else break end
+        if fresh or job.pending[index] then
+            local captured, reason, itemID = readRow(index)
+            if not captured then
+                pendingRow(index, reason, itemID)
+                if retry then job.retry[#job.retry + 1] = index end
+            end
         end
-        if job.cursor > #job.queue then
-            job.queue, job.retry, job.cursor, job.nextPass = job.retry, {}, 1, now + 0.5
+        processed = processed + 1
+        if job.bytes > MAX_BYTES then
+            finish("Scan storage budget reached; captured rows kept as a partial scan", #job.rows > 0); return
         end
+        if debugprofilestop and debugprofilestop() - began > 3 then break end
     end
-    if #job.rows == total and now - math.max(job.lastEvent, job.lastGrowth) >= QUIET then
+    if job.urgentCursor > #job.urgent then job.urgent, job.urgentCursor = {}, 1 end
+    if job.cursor > #job.queue then
+        job.queue, job.retry, job.cursor, job.nextPass = job.retry, {}, 1, now + 1
+    end
+    if job.nextRow >= total and not job.tailSince then job.tailSince = now end
+    if #job.rows == total and now - job.lastGrowth >= QUIET then
         -- No end-of-stream flag exists: a quiet list is still marked partial.
         finish("Replicate list settled", true); return
     end
-    -- Cache notifications alone are not progress; unresolved rows must not extend this wait forever.
-    if #job.rows < total and now - math.max(job.lastProgress, job.lastGrowth) >= RESOLVE then
-        finish("Unresolved rows omitted after waiting for item data", #job.rows > 0); return
+    -- A trickle of resolved rows must not keep the entire retry phase alive indefinitely.
+    if #job.rows < total and job.tailSince and now - job.tailSince >= RESOLVE then
+        finish("Item-data retry budget reached; unresolved rows omitted", #job.rows > 0); return
     end
-    if now - job.began > WAIT + RESOLVE then finish("Capture timed out", false); return end
-    status(("%s AH: captured %d / %d rows (%d remaining)\n%ds elapsed. Stop and Save keeps captured rows.\nKeep the AH open while scanning."):format(job.faction, #job.rows, total, total - #job.rows, math.floor(now - job.began)))
+    if now - job.began > WAIT + RESOLVE then finish("Capture time budget reached; captured rows kept", #job.rows > 0); return end
+    status(("%s AH: captured %d / %d rows\nWaiting: %d item data; %d auction details\n%s\nStop and Save keeps captured rows."):format(job.faction, #job.rows, total, job.pendingCounts.item, job.pendingCounts.details,
+        job.nextRow < total and ("Reading %d more returned rows"):format(total - job.nextRow) or ("Resolving remaining data: up to %ds"):format(math.max(0, math.ceil(RESOLVE - (now - job.tailSince))))))
 end
 
 local function start(mode)
@@ -240,9 +280,11 @@ local function start(mode)
     if remaining > 0 then say(("Full-scan cooldown: about %d more seconds."):format(remaining)); return end
     local now = GetTime()
     job = {startedAt = time(), began = now, faction = faction, auctioneer = auctioneerID(), manual = mode,
-        gotEvent = false, lastEvent = now, lastGrowth = now, lastProgress = now,
-        total = 0, cursor = 1, nextPass = 0, bytes = 1024,
-        queue = {}, retry = {}, variants = {}, rows = {}, byVariant = {}, requested = {}, prices = {}}
+        gotEvent = false, lastGrowth = now,
+        total = 0, nextRow = 0, cursor = 1, urgentCursor = 1, nextPass = 0, bytes = 1024,
+        queue = {}, retry = {}, urgent = {}, urgentQueued = {}, pending = {}, byItem = {},
+        pendingCounts = {item = 0, details = 0}, attempts = {},
+        variants = {}, rows = {}, byVariant = {}, requested = {}, prices = {}}
     elapsedSincePoll = 0
     if scanButton then scanButton:Disable(); neutralButton:Disable(); autoButton:Disable(); saveButton:Disable(); cancelButton:Enable() end
     status(faction .. " AH: waiting for the server's auction list…\nThis can take several minutes. Keep the AH open.")
@@ -304,7 +346,8 @@ events:RegisterEvent("PLAYER_LOGIN")
 events:RegisterEvent("AUCTION_HOUSE_SHOW")
 events:RegisterEvent("AUCTION_HOUSE_CLOSED")
 events:RegisterEvent("REPLICATE_ITEM_LIST_UPDATE")
-events:SetScript("OnEvent", function(_, event, name)
+pcall(events.RegisterEvent, events, "ITEM_DATA_LOAD_RESULT")
+events:SetScript("OnEvent", function(_, event, name, success)
     if event == "ADDON_LOADED" then
         addScanButton()
         if name == "AuctionLedger" then database(); if ALD.RefreshPrices then ALD.RefreshPrices() end end
@@ -314,12 +357,21 @@ events:SetScript("OnEvent", function(_, event, name)
         auctionOpen = true; addScanButton(); readyWindow(); if ALD.RefreshAuctionator then ALD.RefreshAuctionator() end
     elseif event == "AUCTION_HOUSE_CLOSED" then
         auctionOpen = false; finish("Auction House closed during capture", false); readyWindow(); if ALD.RefreshAuctionator then ALD.RefreshAuctionator() end
+    elseif event == "ITEM_DATA_LOAD_RESULT" and job and type(name) == "number" then
+        job.requested[name] = nil
+        if success then
+            for index in pairs(job.byItem[name] or {}) do
+                if job.pending[index] and not job.urgentQueued[index] then
+                    job.urgent[#job.urgent + 1] = index; job.urgentQueued[index] = true
+                end
+            end
+        end
     elseif event == "REPLICATE_ITEM_LIST_UPDATE" and job then
         if not job.gotEvent then
             local db = database()
             if db then db.lastResponseAt = time() end
         end
-        job.gotEvent, job.lastEvent = true, GetTime()
+        job.gotEvent = true
     end
 end)
 

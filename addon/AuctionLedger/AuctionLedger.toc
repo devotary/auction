@@ -2,7 +2,7 @@
 ## Title: Auction Ledger Scanner
 ## Notes: Read-only auction snapshots for the Auction Ledger desktop publisher. /ald
 ## Author: Auction Ledger
-## Version: 0.4.0
+## Version: 0.5.0
 ## OptionalDeps: Auctionator
 ## SavedVariables: AuctionLedgerDB
 ## Category-enUS: Auctions

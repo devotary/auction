@@ -62,18 +62,20 @@ local function harness(previous)
     }
     env.C_AuctionHouse = {
         ReplicateItems = function() h.requests = h.requests + 1; if h.fail then error("request rejected") end end,
-        GetNumReplicateItems = function() return #h.rows end,
+        GetNumReplicateItems = function() return h.totalOverride or #h.rows end,
         GetReplicateItemInfo = function(index)
             h.reads = h.reads + 1
             local row = assert(h.rows[index + 1], "expected zero-based index")
-            return row.name or "Dreamfoil", 1, row.count or 20, 1, true, 60, "ITEM_LEVEL_ABBR",
+            local itemID = row.itemID or 13463
+            if row.noInfoID then itemID = nil end
+            return row.name or "Dreamfoil", 1, row.incomplete and 0 or row.count or 20, 1, true, 60, "ITEM_LEVEL_ABBR",
                 100, 1, row.buyout or 20000, 0, "PRIVATE_HIGH_BIDDER", "PRIVATE_BIDDER",
-                "PRIVATE_OWNER", "PRIVATE_OWNER_FULL", 0, 13463, true
+                "PRIVATE_OWNER", "PRIVATE_OWNER_FULL", 0, itemID, true
         end,
         GetReplicateItemLink = function(index)
             local row = h.rows[index + 1]
             if row.pending then return nil end
-            return row.link or "|cffffffff|Hitem:13463:0:0:0:0:0:0:111:60:0|h[Dreamfoil]|h|r"
+            return row.link or ("|cffffffff|Hitem:" .. (row.itemID or 13463) .. ":0:0:0:0:0:0:111:60:0|h[Dreamfoil]|h|r")
         end,
         GetReplicateItemTimeLeft = function() return 4 end,
     }
@@ -176,6 +178,64 @@ equal(notified.env.AuctionLedgerDB.scans[1].captured, 1)
 equal(notified.env.AuctionLedgerDB.scans[1].unresolved, 1)
 equal(notified.frame.scripts.OnUpdate, nil)
 
+local eventSpam = harness(); eventSpam.rows = {{}}
+eventSpam:command("scan")
+for _ = 1, 16 do eventSpam:event("REPLICATE_ITEM_LIST_UPDATE"); eventSpam:advance(1) end
+equal(#eventSpam.env.AuctionLedgerDB.scans, 1) -- Cache events cannot delay an already captured list forever.
+
+local trickle = harness(); trickle.rows = {{}}
+for n = 2, 11 do trickle.rows[n] = {pending = true} end
+trickle:command("scan"); trickle:event("REPLICATE_ITEM_LIST_UPDATE"); trickle:advance(1)
+for n = 2, 4 do
+    trickle:advance(20); trickle.rows[n].pending = false
+    trickle:event("ITEM_DATA_LOAD_RESULT", 13463, true); trickle:advance(0.05)
+end
+trickle:advance(35)
+equal(trickle.env.AuctionLedgerDB.scans[1].captured, 4)
+equal(trickle.env.AuctionLedgerDB.scans[1].pendingItemData, 7)
+equal(trickle.env.AuctionLedgerDB.scans[1].unread, 0)
+assert(trickle.env.AuctionLedgerDB.scans[1].reason:find("retry budget", 1, true))
+
+local fresh = harness()
+for n = 1, 20000 do fresh.rows[n] = {pending = true} end
+fresh:command("scan"); fresh:event("REPLICATE_ITEM_LIST_UPDATE"); fresh:advance(3)
+fresh.rows[20001] = {itemID = 13466}
+fresh:event("REPLICATE_ITEM_LIST_UPDATE"); fresh:advance(0.05); fresh:command("save")
+equal(fresh.env.AuctionLedgerDB.scans[1].captured, 1) -- New rows bypass the 20,000-row retry backlog.
+equal(fresh.env.AuctionLedgerDB.scans[1].variants[1].itemId, 13466)
+equal(fresh.env.AuctionLedgerDB.scans[1].pendingItemData, 20000)
+
+local wake = harness()
+for n = 1, 19999 do wake.rows[n] = {pending = true} end
+wake.rows[20000] = {pending = true, itemID = 13468}
+wake:command("scan"); wake:event("REPLICATE_ITEM_LIST_UPDATE"); wake:advance(3)
+wake.rows[20000].pending = false
+wake:event("ITEM_DATA_LOAD_RESULT", 13468, true); wake:advance(0.05); wake:command("save")
+equal(wake.env.AuctionLedgerDB.scans[1].captured, 1) -- Loaded tail row is captured on the next tick.
+equal(wake.env.AuctionLedgerDB.scans[1].variants[1].itemId, 13468)
+
+local details = harness(); details.rows = {{incomplete = true}}
+details:command("scan"); details:event("REPLICATE_ITEM_LIST_UPDATE"); details:advance(1)
+equal(details.loads, 1) -- Request known item data even when other row fields are incomplete.
+details.rows[1].incomplete = false; details:event("ITEM_DATA_LOAD_RESULT", 13463, true); details:advance(16)
+equal(details.env.AuctionLedgerDB.scans[1].captured, 1)
+local linkIdentity = harness(); linkIdentity.rows = {{noInfoID = true}}
+linkIdentity:command("scan"); linkIdentity:event("REPLICATE_ITEM_LIST_UPDATE"); linkIdentity:advance(16)
+equal(linkIdentity.env.AuctionLedgerDB.scans[1].variants[1].itemId, 13463) -- Actual item link supplies the ID.
+local loadFailure = harness(); loadFailure.rows = {{pending = true}}
+loadFailure:command("scan"); loadFailure:event("REPLICATE_ITEM_LIST_UPDATE"); loadFailure:advance(1)
+for _ = 1, 5 do loadFailure:event("ITEM_DATA_LOAD_RESULT", 13463, false); loadFailure:advance(2) end
+equal(loadFailure.loads, 3); loadFailure:command("cancel")
+local stillPending = harness(); stillPending.rows = {{pending = true}}
+stillPending:command("scan"); stillPending:event("REPLICATE_ITEM_LIST_UPDATE"); stillPending:advance(0.05)
+for _ = 1, 3 do
+    stillPending:event("ITEM_DATA_LOAD_RESULT", 13463, true); stillPending:advance(0.05)
+end
+local reads = stillPending.reads
+stillPending.clock = 10; stillPending:advance(0.05)
+equal(stillPending.reads - reads, 1) -- A successful load with an unready replicate row must not duplicate retry entries.
+stillPending:command("cancel")
+
 local old = success.env.AuctionLedgerDB.scans[1]
 local stopped = harness({version = 1, scans = {old}})
 stopped.clock = 100
@@ -233,6 +293,37 @@ large:command("scan"); large:event("REPLICATE_ITEM_LIST_UPDATE"); large:advance(
 equal(large.reads, 400)
 large:command("cancel")
 equal(#large.env.AuctionLedgerDB.scans, 0)
+
+local rowLimit = harness()
+for n = 1, 500 do rowLimit.rows[n] = {} end
+rowLimit:command("scan"); rowLimit:event("REPLICATE_ITEM_LIST_UPDATE"); rowLimit:advance(0.05)
+rowLimit.totalOverride = 250001; rowLimit:advance(0.05)
+equal(rowLimit.env.AuctionLedgerDB.scans[1].captured, 400)
+equal(rowLimit.env.AuctionLedgerDB.scans[1].received, 250001)
+equal(rowLimit.env.AuctionLedgerDB.scans[1].unread, 249601)
+local timeLimit = harness()
+for n = 1, 1000 do timeLimit.rows[n] = {} end
+timeLimit:command("scan"); timeLimit:event("REPLICATE_ITEM_LIST_UPDATE"); timeLimit:advance(0.05)
+timeLimit.clock = 1000; timeLimit:advance(0.05)
+equal(timeLimit.env.AuctionLedgerDB.scans[1].status, "saved")
+assert(timeLimit.env.AuctionLedgerDB.scans[1].captured > 0)
+assert(timeLimit.env.AuctionLedgerDB.scans[1].reason:find("time budget", 1, true))
+
+local fullSize = harness()
+for n = 1, 166500 do fullSize.rows[n] = {itemID = 100000 + n % 25000} end
+fullSize:command("scan"); fullSize:event("REPLICATE_ITEM_LIST_UPDATE"); fullSize:advance(30)
+local fullScan = fullSize.env.AuctionLedgerDB.scans[1]
+equal(fullScan.captured, 166500); equal(fullScan.unresolved, 0)
+assert(fullScan.estimatedBytes > 24 * 1024 * 1024) -- Old storage guard rejected this valid market size.
+
+local storage = harness()
+local modifiers = string.rep(":1234567890123", 130)
+for n = 1, 23000 do storage.rows[n] = {link = "|Hitem:13463:" .. n .. modifiers .. "|h[Variant]|h"} end
+storage:command("scan"); storage:event("REPLICATE_ITEM_LIST_UPDATE"); storage:advance(10)
+local bounded = assert(storage.env.AuctionLedgerDB.scans[1], "Storage limit must save the captured rows")
+equal(bounded.status, "saved"); equal(bounded.coverage, "partial")
+assert(bounded.captured > 20000 and bounded.captured < 23000)
+assert(bounded.reason:find("storage budget", 1, true))
 
 local retention = harness()
 retention.rows = {{}}
@@ -411,5 +502,5 @@ if arg[3] then
     local paired = {version = 1, scans = {success.env.AuctionLedgerDB.scans[1], success.env.AuctionLedgerDB.scans[2], neutral.env.AuctionLedgerDB.scans[1]}}
     local file = assert(io.open(arg[3], "wb")); file:write("AuctionLedgerDB = " .. literal(paired)); file:close()
 end
-print("PASS: streaming, stop-and-save, house detection, cross-house retention, native Auctionator pricing and stack/vendor totals, exact variants, bounded indexing, immediate updates, AH Scan button, cancellation and private fields")
+print("PASS: streaming, large scans, storage/time partial saves, bounded item-data retries, stop-and-save, house detection, cross-house retention, native Auctionator pricing and stack/vendor totals, exact variants, bounded indexing, immediate updates, AH Scan button, cancellation and private fields")
 return harness
