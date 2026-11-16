@@ -32,6 +32,15 @@ pub struct Snapshot {
     pub coverage: String,
     pub items: Vec<Item>,
 }
+impl Snapshot {
+    pub(crate) fn house(&self) -> Option<&'static str> {
+        match self.faction.as_str() {
+            "Alliance" | "Horde" | "Faction" => Some("Faction"),
+            "Neutral" => Some("Neutral"),
+            _ => None,
+        }
+    }
+}
 #[derive(Deserialize, Serialize)]
 pub struct History {
     pub version: u32,
@@ -188,10 +197,28 @@ fn save_report(output: &Path, report: &Value) -> Result<String> {
 }
 
 pub fn build(history_path: &Path, output: &Path, fees: &crate::flips::Fees) -> Result<Value> {
-    let history: History = serde_json::from_slice(&fs::read(history_path)?)?;
+    let mut history: History = serde_json::from_slice(&fs::read(history_path)?)?;
     if history.version != 1 || history.snapshots.is_empty() {
         return Err("No supported snapshots to publish".into());
     }
+    let mut observations = BTreeMap::new();
+    for mut scan in history.snapshots {
+        if scan.source == "Auction Ledger" {
+            scan.faction = scan
+                .house()
+                .ok_or("Auction Ledger scans must identify Faction or Neutral AH.")?
+                .into();
+            scan.realm = "Auction House".into();
+        }
+        let identity = (
+            scan.realm.clone(),
+            scan.faction.clone(),
+            scan.source.clone(),
+            scan.timestamp.clone(),
+        );
+        observations.insert(identity, scan);
+    }
+    history.snapshots = observations.into_values().collect();
     let mut groups: BTreeMap<String, Vec<(i64, &Snapshot)>> = BTreeMap::new();
     let mut snapshot_metadata = Vec::new();
     for s in &history.snapshots {

@@ -78,6 +78,18 @@ test('imports deduplicate timestamps but keep realms, factions and sources separ
   assert.throws(() => importText('itemId,buyout,count\n13463,10,0','scan.csv',{realm:'Test',faction:'Alliance',timestamp:date}));
 });
 
+test('Ledger history ignores realm and player-faction labels while preserving AH types and observation times',()=>{
+  const first={...scan(date,[item(13463,100,5)]),source:'Auction Ledger',realm:'First label'};
+  const alias={...first,realm:'Another label',faction:'Horde'};
+  const snapshots=mergeSnapshots([first,alias,{...alias,faction:'Neutral'},{...alias,timestamp:'2026-11-02T12:00:00.000Z'}]);
+  assert.equal(snapshots.length,3);
+  assert.ok(snapshots.every(s=>s.realm==='Auction House'));
+  assert.equal(snapshots.filter(s=>s.faction==='Faction').length,2);
+  assert.equal(snapshots.filter(s=>s.faction==='Neutral').length,1);
+  assert.ok(snapshots.every(s=>s.items[0].quantity===5)); // Aliases do not add together listed supply.
+  assert.throws(()=>sanitizeSnapshot({...first,faction:'Unknown'}),/Faction or Neutral/);
+});
+
 test('trend lookback uses latest observation time and a fixed intersection basket', () => {
   const scans = [scan(date,[item(13463,100),item(13468,1000)]),scan('2026-11-02T12:00:00Z',[item(13463,120)]),scan('2026-11-03T12:00:00Z',[item(13463,150),item(13468,900)])];
   const a = analyze(scans,7);

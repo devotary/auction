@@ -26,86 +26,84 @@ pub fn build(history: &History, fees: &Fees) -> Result<Value> {
     if fees.faction_percent > 100 || fees.neutral_percent > 100 {
         return Err("Flip fees must be whole percentages from 0 to 100.".into());
     }
-    // Cache prices and daily lows are not current listings or verified house identities.
-    let mut realms: BTreeMap<&str, BTreeMap<&str, (i64, &Snapshot)>> = BTreeMap::new();
+    // Realm labels and player factions share one economy; only the AH type separates scans.
+    let mut houses: BTreeMap<&str, (i64, &Snapshot)> = BTreeMap::new();
     for scan in &history.snapshots {
-        if scan.source != "Auction Ledger"
-            || !["Alliance", "Horde", "Neutral"].contains(&scan.faction.as_str())
-        {
+        if scan.source != "Auction Ledger" {
             continue;
         }
+        let Some(house) = scan.house() else {
+            continue;
+        };
         let timestamp = DateTime::parse_from_rfc3339(&scan.timestamp)?.timestamp_millis();
-        let houses = realms.entry(&scan.realm).or_default();
         if houses
-            .get(scan.faction.as_str())
+            .get(house)
             .is_none_or(|(previous, _)| timestamp >= *previous)
         {
-            houses.insert(&scan.faction, (timestamp, scan));
+            houses.insert(house, (timestamp, scan));
         }
     }
     let mut pairs = Vec::new();
-    for (realm, houses) in realms {
-        let known_faction = houses.contains_key("Alliance") || houses.contains_key("Horde");
-        for faction in ["Alliance", "Horde"] {
-            if known_faction && !houses.contains_key(faction) {
-                continue;
-            }
-            let faction_scan = houses.get(faction).map(|(_, scan)| *scan);
-            let neutral_scan = houses.get("Neutral").map(|(_, scan)| *scan);
-            let mut items = Vec::new();
-            let mut matched = 0;
-            if let (Some(faction_scan), Some(neutral_scan)) = (faction_scan, neutral_scan) {
-                let neutral_items: HashMap<_, _> = neutral_scan
-                    .items
-                    .iter()
-                    .map(|item| (item.key.as_str(), item))
-                    .collect();
-                for faction_item in &faction_scan.items {
-                    let Some(neutral_item) = neutral_items
-                        .get(faction_item.key.as_str())
-                        .filter(|item| item.item_id == faction_item.item_id)
-                    else {
+    if !houses.is_empty() {
+        let faction_scan = houses.get("Faction").map(|(_, scan)| *scan);
+        let neutral_scan = houses.get("Neutral").map(|(_, scan)| *scan);
+        let mut items = Vec::new();
+        let mut matched = 0;
+        if let (Some(faction_scan), Some(neutral_scan)) = (faction_scan, neutral_scan) {
+            let neutral_items: HashMap<_, _> = neutral_scan
+                .items
+                .iter()
+                .map(|item| (item.key.as_str(), item))
+                .collect();
+            for faction_item in &faction_scan.items {
+                let Some(neutral_item) = neutral_items
+                    .get(faction_item.key.as_str())
+                    .filter(|item| item.item_id == faction_item.item_id)
+                else {
+                    continue;
+                };
+                matched += 1;
+                for (direction, buy, sell, fee) in [
+                    (
+                        "neutral-to-faction",
+                        *neutral_item,
+                        faction_item,
+                        fees.faction_percent,
+                    ),
+                    (
+                        "faction-to-neutral",
+                        faction_item,
+                        *neutral_item,
+                        fees.neutral_percent,
+                    ),
+                ] {
+                    // Round proceeds down to whole copper; do not apply the cheapest price to all listed units.
+                    let proceeds = sell.min_buyout * u64::from(100 - fee) / 100;
+                    if proceeds <= buy.min_buyout {
                         continue;
-                    };
-                    matched += 1;
-                    for (direction, buy, sell, fee) in [
-                        (
-                            "neutral-to-faction",
-                            *neutral_item,
-                            faction_item,
-                            fees.faction_percent,
-                        ),
-                        (
-                            "faction-to-neutral",
-                            faction_item,
-                            *neutral_item,
-                            fees.neutral_percent,
-                        ),
-                    ] {
-                        // Round proceeds down to whole copper; do not apply the cheapest price to all listed units.
-                        let proceeds = sell.min_buyout * u64::from(100 - fee) / 100;
-                        if proceeds <= buy.min_buyout {
-                            continue;
-                        }
-                        let margin = proceeds - buy.min_buyout;
-                        items.push(json!({"key":buy.key,"itemId":buy.item_id,"name":buy.name,"icon":buy.icon,
+                    }
+                    let margin = proceeds - buy.min_buyout;
+                    items.push(
+                        json!({"key":buy.key,"itemId":buy.item_id,"name":buy.name,"icon":buy.icon,
                             "category":buy.category,"quality":buy.quality,"direction":direction,
                             "buy":buy.min_buyout,"sell":sell.min_buyout,"feePercent":fee,
-                            "margin":margin,"roi":margin as f64 / buy.min_buyout as f64 * 100.0}));
-                    }
+                            "margin":margin,"roi":margin as f64 / buy.min_buyout as f64 * 100.0}),
+                    );
                 }
             }
-            items.sort_by(|a, b| {
-                b["margin"]
-                    .as_u64()
-                    .cmp(&a["margin"].as_u64())
-                    .then_with(|| a["name"].as_str().cmp(&b["name"].as_str()))
-                    .then_with(|| a["key"].as_str().cmp(&b["key"].as_str()))
-            });
-            pairs.push(json!({"key":serde_json::to_string(&(realm, faction))?,"realm":realm,"faction":faction,
-                "factionScan":faction_scan.map(metadata),"neutralScan":neutral_scan.map(metadata),
-                "matchedItems":matched,"items":items}));
         }
+        items.sort_by(|a, b| {
+            b["margin"]
+                .as_u64()
+                .cmp(&a["margin"].as_u64())
+                .then_with(|| a["name"].as_str().cmp(&b["name"].as_str()))
+                .then_with(|| a["key"].as_str().cmp(&b["key"].as_str()))
+        });
+        pairs.push(
+            json!({"key":"shared","realm":"Auction House","faction":"Faction",
+                "factionScan":faction_scan.map(metadata),"neutralScan":neutral_scan.map(metadata),
+                "matchedItems":matched,"items":items}),
+        );
     }
     Ok(json!({"version":1,"fees":fees,"pairs":pairs}))
 }
@@ -128,8 +126,6 @@ mod tests {
     fn directions_use_destination_fees_and_only_identical_variants_in_latest_scans() {
         let mut cache = scan("Neutral", "2026-01-03T00:00:00Z", json!([item("base", 1)]));
         cache.source = "Auctionator cache".into();
-        let mut other_realm = scan("Neutral", "2026-01-04T00:00:00Z", json!([item("base", 1)]));
-        other_realm.realm = "Elsewhere".into();
         let history = History {
             version: 1,
             snapshots: vec![
@@ -160,7 +156,6 @@ mod tests {
                     ]),
                 ),
                 cache,
-                other_realm,
             ],
         };
         let report = build(&history, &Fees::default()).unwrap();
@@ -168,7 +163,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|pair| pair["realm"] == "Test")
+            .find(|pair| pair["key"] == "shared")
             .unwrap();
         assert_eq!(pair["matchedItems"], 3);
         assert_eq!(pair["factionScan"]["timestamp"], "2026-01-02T00:00:00Z");
@@ -193,7 +188,7 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .find(|pair| pair["realm"] == "Test")
+            .find(|pair| pair["key"] == "shared")
             .unwrap();
         assert_eq!(pair["items"].as_array().unwrap().len(), 3);
         assert!(
@@ -206,6 +201,33 @@ mod tests {
             )
             .is_err()
         );
+    }
+    #[test]
+    fn newest_house_scans_pair_across_realm_and_faction_labels() {
+        let older = scan(
+            "Alliance",
+            "2026-01-01T00:00:00Z",
+            json!([item("base", 1000)]),
+        );
+        let mut newer = scan("Horde", "2026-01-03T00:00:00Z", json!([item("base", 2000)]));
+        newer.realm = "Another label".into();
+        let mut neutral = scan(
+            "Neutral",
+            "2026-01-02T00:00:00Z",
+            json!([item("base", 500)]),
+        );
+        neutral.realm = "Third label".into();
+        let history = History {
+            version: 1,
+            snapshots: vec![older, newer, neutral],
+        };
+        let report = build(&history, &Fees::default()).unwrap();
+        let pairs = report["pairs"].as_array().unwrap();
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0]["factionScan"]["timestamp"], "2026-01-03T00:00:00Z");
+        assert_eq!(pairs[0]["neutralScan"]["timestamp"], "2026-01-02T00:00:00Z");
+        assert_eq!(pairs[0]["items"][0]["direction"], "neutral-to-faction");
+        assert_eq!(pairs[0]["items"][0]["margin"], 1400);
     }
     #[test]
     fn missing_house_stays_missing_and_fee_rounding_never_invents_a_positive_margin() {

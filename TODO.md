@@ -20,6 +20,7 @@
 - [x] Align scanner and publisher limits at 500,000 listing rows and verify a 300,000-row scan through import.
 - [x] Restrict publishing and active reports to Auction Ledger inputs and history.
 - [x] Discover Auction Ledger saved scans across accounts in the configured game installation and report the number of scanner files read.
+- [x] Combine realm aliases into shared Faction and Neutral markets, migrate history and watchlists, and pair the newest scans across accounts.
 - [ ] Verify the first paired Faction and Neutral scans using the updated in-game buttons.
 - [ ] Verify automatic house recognition, the AH Scan button, and Auctionator price/Shift stack totals in the Forever client.
 - [ ] Verify a large in-game scan with the revised storage budget and remaining-data diagnostics.

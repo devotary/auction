@@ -27,13 +27,13 @@ Scan each house separately: `/ald scan faction` at your faction's AH and `/ald s
 
 Run **Auction Ledger Flips** from the application menu, or `./publish-flips` from the repository directory. This uses the same publisher, private configuration, history, and deploy key as `./publish-auctions`; either launcher updates both trends and flips.
 
-The **Flips** tab compares the latest Auction Ledger Scanner snapshots for the same realm and identical item variants. Each row shows **Neutral → Faction** or **Faction → Neutral**, buy and sell prices per unit, margin after the destination sale fee, and return on cost. Search, minimum-margin, direction, and scan-age filters help narrow the list. Both scans must be within 24 hours by default; older comparisons can be viewed explicitly.
+The **Flips** tab compares the latest **Faction AH** and **Neutral AH** snapshots across accounts. Realm labels share one economy, and Alliance/Horde labels both map to Faction AH. Each row matches identical item variants and shows **Neutral → Faction** or **Faction → Neutral**, buy and sell prices per unit, margin after the destination sale fee, and return on cost. Search, minimum-margin, direction, return-limit and scan-age filters help narrow the list. Both scans must be within 24 hours by default; older comparisons can be viewed explicitly.
 
 For example, a 5s Neutral buy and a 10s Faction resale gives a 4s 50c unit margin with a 5% sale fee. The reverse route uses the Neutral sale fee. Defaults assume Classic fees of 5% for faction sales and 15% for Neutral sales; these can be changed in the private publisher configuration. Margins exclude lost deposits, transfer costs, and further undercutting. A minimum unit price may require buying a whole stack, and a listed resale price does not prove demand.
 
 ## What the site shows
 
-The dashboard loads one market and one period at a time, including on mobile. Choose 24 hours, 7 days, 30 days, or all history. Search, filter, and sort item rows; open an item to view its price history and use the lightweight trade calculator. Watchlists stay in that browser and are not published.
+The dashboard loads one AH type and one period at a time, including on mobile. Choose Faction AH or Neutral AH and 24 hours, 7 days, 30 days, or all history. Search, filter, and sort item rows; open an item to view its price history and use the lightweight trade calculator. Watchlists stay in that browser and are not published.
 
 The app prepares trend metrics before publishing. The browser draws the charts, filters and sorts report rows, and calculates only the amounts you enter in the trade calculator. Scans are published automatically; there are no manual JSON upload or export controls on the website.
 
@@ -49,7 +49,7 @@ The interface uses Classic WoW artwork throughout: stone and parchment surfaces,
 
 An auction that disappears might have sold, expired, or been cancelled. The Ledger cannot identify confirmed sales or realized profit from these scans.
 
-Realm and faction remain separate. Only saved Auction Ledger observations feed current reports. Legacy Auctionator and Auctioneer inputs and history are excluded from publishing; the in-game Auctionator tooltip integration remains available.
+Only **Faction AH** and **Neutral AH** form separate markets. Existing realm labels are combined into the same history, with duplicate observations counted once. Each house uses its newest saved scan; stock from separate scans is not added together. Only saved Auction Ledger observations feed current reports. Legacy Auctionator and Auctioneer inputs and history are excluded from publishing; the in-game Auctionator tooltip integration remains available.
 
 ## Development
 

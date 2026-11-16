@@ -19,7 +19,7 @@ test('the actual Lua addon produces private, timestamped snapshots accepted by t
     const snapshots=importText(raw.toString('latin1'),'AuctionLedger.lua');
     assert.equal(snapshots.length,2);
     const s=snapshots[0];
-    assert.equal(s.realm,'Tést Realm');assert.equal(s.faction,'Alliance');assert.equal(s.source,'Auction Ledger');assert.equal(s.coverage,'partial');
+    assert.equal(s.realm,'Auction House');assert.equal(s.faction,'Faction');assert.equal(s.source,'Auction Ledger');assert.equal(s.coverage,'partial');
     assert.equal(s.items[0].minBuyout,1000);assert.equal(s.items[0].medianBuyout,1000);
     assert.equal(s.items[0].quantity,30);assert.equal(s.items[0].listings,2);
     assert.ok(Date.parse(s.timestamp)>Date.parse('2026-11-01'));

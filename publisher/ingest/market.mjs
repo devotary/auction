@@ -47,8 +47,13 @@ export function isoDate(value) {
 }
 export function sanitizeSnapshot(raw) {
   if (!raw || typeof raw !== 'object' || !Array.isArray(raw.items) || !raw.items.length || raw.items.length > 100000) throw new Error('A snapshot needs 1–100,000 item observations.');
-  const realm = text(raw.realm).trim();
-  const faction = text(raw.faction).trim();
+  let realm = text(raw.realm).trim();
+  let faction = text(raw.faction).trim();
+  if (raw.source === 'Auction Ledger') {
+    realm = 'Auction House';
+    if (['Alliance', 'Horde'].includes(faction)) faction = 'Faction';
+    if (!['Faction', 'Neutral'].includes(faction)) throw new Error('Auction Ledger scans must identify Faction or Neutral AH.');
+  }
   if (!realm || !faction) throw new Error('Choose a realm and faction before importing.');
   const items = raw.items.map(i => {
     const itemId = number(i.itemId, {min: 1, max: 1e9, integer: true});

@@ -15,11 +15,19 @@ const money = value => {
 const icon = i => `<img class="item-icon quality-${i.quality}" src="assets/icons/${escape(i.icon)}.jpg" data-fallback="${escape(i.icon)}" width="36" height="36" alt="" loading="lazy">`;
 const views = ['overview','ledger','watchlist','flips','library'];
 const state = {market:'', days:7, view:'overview', search:'', category:'', rank:'all', sort:'name', descending:false, page:0, current:null, report:null, loading:false,
-  flipReport:null, flipPair:'', flipDirection:'all', flipSearch:'', flipSort:'margin:desc', flipMin:0, flipMax:Infinity, flipHours:24, flipPage:0};
+  flipReport:null, flipDirection:'all', flipSearch:'', flipSort:'margin:desc', flipMin:0, flipMax:Infinity, flipHours:24, flipPage:0};
 const reportCache = new Map();
 let renderSequence = 0;
 let favorites;
-try { favorites = new Set(JSON.parse(localStorage.getItem('auction-ledger-watchlist') || '[]').filter(x => typeof x === 'string')); } catch { favorites = new Set(); }
+try {
+  favorites = new Set(JSON.parse(localStorage.getItem('auction-ledger-watchlist') || '[]').filter(x => typeof x === 'string').map(key => {
+    try {
+      const divider = key.lastIndexOf('|'), market = JSON.parse(key.slice(0, divider));
+      const house = market[1] === 'Neutral' ? 'Neutral' : ['Alliance', 'Horde', 'Faction'].includes(market[1]) ? 'Faction' : null;
+      return market[2] === 'Auction Ledger' && house ? `${JSON.stringify(['Auction House', house, 'Auction Ledger'])}|${key.slice(divider + 1)}` : key;
+    } catch { return key; }
+  }));
+} catch { favorites = new Set(); }
 let toastTimer;
 function notify(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('#toast').hidden = true, 4500); }
 function watchKey(i) { return `${state.market}|${i.key}`; }
@@ -51,7 +59,7 @@ function sparkline(history) {
 function setMarketOptions() {
   const markets = new Map(state.report.markets.map(s => [s.key,s]));
   if (!markets.has(state.market)) state.market = markets.keys().next().value || '';
-  $('#market-select').innerHTML = [...markets].map(([k, s]) => `<option value="${escape(k)}">${escape(s.realm)} · ${escape(s.faction)} · ${escape(s.source)}</option>`).join('');
+  $('#market-select').innerHTML = [...markets].map(([k, s]) => `<option value="${escape(k)}">${s.faction === 'Neutral' ? 'Neutral AH' : 'Faction AH'}</option>`).join('');
   $('#market-select').value = state.market;
 }
 async function loadReport(path) {
@@ -159,20 +167,16 @@ function renderLedger() {
 }
 function renderLibrary() {
   const real = [...state.report.snapshots].reverse();
-  $('#library-body').innerHTML = real.map(s => `<tr><td>${escape(fullDate(s.timestamp))}</td><td>${escape(s.realm)} · ${escape(s.faction)}</td><td>${escape(s.source)}</td><td class="number">${count(s.itemCount)}</td></tr>`).join('');
+  $('#library-body').innerHTML = real.map(s => `<tr><td>${escape(fullDate(s.timestamp))}</td><td>${s.faction === 'Neutral' ? 'Neutral AH' : 'Faction AH'}</td><td>${escape(s.source)}</td><td class="number">${count(s.itemCount)}</td></tr>`).join('');
 }
 
 function renderFlips() {
   const report = state.flipReport;
   if (!report) return;
-  if (!report.pairs.some(pair => pair.key === state.flipPair)) state.flipPair = report.pairs[0]?.key || '';
-  $('#flip-market').innerHTML = report.pairs.map(pair => `<option value="${escape(pair.key)}">${escape(pair.realm)} · ${escape(pair.faction)}</option>`).join('');
-  $('#flip-market').value = state.flipPair;
-  $('#flip-market').disabled = !report.pairs.length;
-  const pair = report.pairs.find(pair => pair.key === state.flipPair);
+  const pair = report.pairs[0];
   $('#data-notice').textContent = 'Buy on one Auction House, resell on the other. These are saved observations, not live offers or confirmed sales.';
   $('#flip-fees').textContent = `Assumed sale fees: Faction ${report.fees.factionPercent}% · Neutral ${report.fees.neutralPercent}%`;
-  $('#flip-scans').innerHTML = [['Faction', pair?.factionScan],['Neutral', pair?.neutralScan]].map(([house, scan]) => `<div><p>${house} AH${house === 'Faction' && pair ? ` · ${escape(pair.faction)}` : ''}</p><strong>${scan ? escape(fullDate(scan.timestamp)) : 'Not scanned'}</strong><small>${scan ? `${count(scan.itemCount)} item variants · ${escape(scan.coverage)} capture` : 'Open this AH and save a scan'}</small></div>`).join('');
+  $('#flip-scans').innerHTML = [['Faction', pair?.factionScan],['Neutral', pair?.neutralScan]].map(([house, scan]) => `<div><p>${house} AH</p><strong>${scan ? escape(fullDate(scan.timestamp)) : 'Not scanned'}</strong><small>${scan ? `${count(scan.itemCount)} item variants · ${escape(scan.coverage)} capture` : 'Open this AH and save a scan'}</small></div>`).join('');
   const dates = [pair?.factionScan, pair?.neutralScan].map(scan => Date.parse(scan?.timestamp));
   const missing = !pair?.factionScan || !pair?.neutralScan;
   const now = Date.now(), future = !missing && dates.some(date => date > now + 300000);
@@ -204,7 +208,7 @@ function renderFlips() {
   let title = 'No flips match these filters', explanation = 'Try another direction, a lower minimum margin, a higher return limit, or a different item search.';
   if (missing) {
     title = !pair?.neutralScan && pair?.factionScan ? 'Scan the Neutral Auction House' : !pair?.factionScan && pair?.neutralScan ? 'Scan your Faction Auction House' : 'Scan both Auction Houses';
-    explanation = 'At the matching AH, use /ald scan faction or /ald scan neutral. Save, /reload, then run Auction Ledger Flips. Both scans must be on the same realm.';
+    explanation = 'At each AH, use /ald scan faction or /ald scan neutral. Save, /reload, then run Auction Ledger Flips.';
   } else if (future) {
     title = 'Scan times are ahead of this device’s clock';
     explanation = 'Check the clocks on the scanning computer and this device, then publish fresh scans. Future-dated comparisons are hidden.';
@@ -230,7 +234,7 @@ function openItem(key) {
   const i = state.analysis.items.find(i => i.key === key);
   if (!i) return;
   state.current = i;
-  $('#item-identity').innerHTML = `<div class="item-identity">${icon(i)}<div><h2 id="item-title">${escape(i.name)}</h2><p>${escape(state.analysis.latest.realm)} · ${escape(state.analysis.latest.faction)} · #${i.itemId}</p></div></div>`;
+  $('#item-identity').innerHTML = `<div class="item-identity">${icon(i)}<div><h2 id="item-title">${escape(i.name)}</h2><p>${escape(state.analysis.latest.faction)} AH · #${i.itemId}</p></div></div>`;
   $('#item-stats').innerHTML = `<div><p>Lowest unit buyout</p><strong>${money(i.minBuyout)}</strong></div><div><p>Change vs reference</p><strong>${percent(i.change)}</strong></div><div><p>Listed units</p><strong class="mono">${count(i.quantity)}</strong></div>`;
   $('#item-chart').innerHTML = chart(i.history.map(h => ({timestamp:h.timestamp, value:h.price})), {price:true, id:'item-fill', label:`${i.name} minimum unit buyout history`});
   $('#item-history-note').textContent = `${i.historyCount ?? i.history.length} observations · ${fullDate(i.history[0].timestamp)} to ${fullDate(i.history.at(-1).timestamp)}.${i.historyCount > i.history.length ? ` Chart shows ${i.history.length} measured samples; metrics use all observations.` : ''}`;
@@ -269,7 +273,6 @@ $('#calculator-form').addEventListener('input', calculate);
 $('#calculator-form').addEventListener('submit', e => e.preventDefault());
 $('#help-button').addEventListener('click', () => $('#help-dialog').showModal());
 $('#opportunities-button').addEventListener('click', () => { state.rank = 'spread'; state.sort = 'spread'; state.descending = true; state.page = 0; renderLedger(); $('#ledger-panel').scrollIntoView({behavior:'auto',block:'start'}); });
-$('#flip-market').addEventListener('change', e => { state.flipPair = e.target.value; state.flipPage = 0; renderFlips(); });
 $('#flip-search').addEventListener('input', e => { state.flipSearch = e.target.value; state.flipPage = 0; renderFlips(); });
 $('#flip-min').addEventListener('input', e => { if (!e.target.checkValidity()) return; state.flipMin = Number(e.target.value); state.flipPage = 0; renderFlips(); });
 $('#flip-max').addEventListener('input', e => { if (!e.target.checkValidity()) return; state.flipMax = e.target.value === '' ? Infinity : Number(e.target.value); state.flipPage = 0; renderFlips(); });

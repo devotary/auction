@@ -20,7 +20,7 @@ const snap = (timestamp, realm = 'Realm', price = 100) => sanitizeSnapshot({
   realm, faction: 'Alliance', source: 'Auction Ledger', timestamp,
   items: [{ itemId: 13463, key: '13463', name: 'Dreamfoil', minBuyout: price, quantity: 5 }],
 });
-const ledger = (realm='Realm', faction='Alliance', price=250) => `AuctionLedgerDB={version=1,scans={{status="saved",realm=${JSON.stringify(realm)},faction=${JSON.stringify(faction)},startedAt=1706745540,timestamp=1706745600,captured=1,received=1,variants={{itemId=13463,itemString="item:13463",name="Dreamfoil",classID=7}},rows={"1;5;${price*5};0;0;4"}}}}`;
+const ledger = (realm='Realm', faction='Alliance', price=250, timestamp=1706745600) => `AuctionLedgerDB={version=1,scans={{status="saved",realm=${JSON.stringify(realm)},faction=${JSON.stringify(faction)},startedAt=${timestamp-60},timestamp=${timestamp},captured=1,received=1,variants={{itemId=13463,itemString="item:13463",name="Dreamfoil",classID=7}},rows={"1;5;${price*5};0;0;4"}}}}`;
 const emptyLedger = 'AuctionLedgerDB={version=1,scans={}}';
 
 async function accountFile(f, account, body) {
@@ -45,10 +45,10 @@ test('discovers saved scans across accounts without duplicate reads or account i
   assert.equal(receipt.filesRead,2);assert.equal(receipt.imported,2);assert.equal(receipt.total,2);
   let output=await readFile(f.outputPath,'utf8');
   assert.doesNotMatch(output,/FIRST_TEST_ACCOUNT|SECOND_TEST_ACCOUNT|SavedVariables|WTF/);
-  assert.deepEqual(new Set(JSON.parse(output).snapshots.map(s=>s.faction)),new Set(['Alliance','Neutral']));
+  assert.deepEqual(new Set(JSON.parse(output).snapshots.map(s=>s.faction)),new Set(['Faction','Neutral']));
   const explicit=await prepare({...args,config:{inputs:[{path:one},{path:two}]}});
   assert.equal(explicit.filesRead,2);assert.equal(explicit.imported,2);assert.equal(explicit.total,2);
-  await writeFile(future,ledger('Other Realm','Horde',400));
+  await writeFile(future,ledger('Other Realm','Horde',400,1706745660));
   const later=await prepare(args);
   assert.equal(later.filesRead,3);assert.equal(later.total,3); // New accounts are discovered on the next run.
   for(const original of originals){
@@ -78,12 +78,12 @@ test('protects discovered source files and aborts atomically on a malformed acco
   assert.equal(await readFile(f.outputPath,'utf8'),'preserve previous output');
 });
 
-test('imports without modifying addon source; merges sanitized snapshots and keeps markets isolated', async t => {
+test('imports without modifying addon source; unifies realm labels and keeps AH types separate', async t => {
   const f = await fixture(t, [snap('2024-01-01T00:00:00Z')]);
   await mkdir(join(f.dir,'one')); await mkdir(join(f.dir,'two'));
   const one = join(f.dir, 'one', 'AuctionLedger.lua'), two = join(f.dir, 'two', 'AuctionLedger.lua');
   const body = ledger('Elsewhere','Horde');
-  await writeFile(one, body); await writeFile(two, ledger('Other Realm'));
+  await writeFile(one, body); await writeFile(two, ledger('Other Realm','Neutral'));
   const before = await stat(one);
   const result = await prepare({ config: { inputs: [{ path: one }, { path: two }] }, historyPath: f.historyPath, outputPath: f.outputPath });
   assert.equal(await readFile(one, 'utf8'), body);
@@ -91,7 +91,8 @@ test('imports without modifying addon source; merges sanitized snapshots and kee
   const output = JSON.parse(await readFile(f.outputPath, 'utf8'));
   assert.equal(output.version, 1);
   assert.equal(output.snapshots.length, 3);
-  assert.deepEqual(new Set(output.snapshots.map(s => s.realm)), new Set(['Realm', 'Elsewhere', 'Other Realm']));
+  assert.deepEqual(new Set(output.snapshots.map(s => s.realm)), new Set(['Auction House']));
+  assert.deepEqual(new Set(output.snapshots.map(s => s.faction)), new Set(['Faction','Neutral']));
   assert.equal(result.imported, 2);
   assert.ok(!JSON.stringify(output).includes('seller'));
 });
@@ -166,8 +167,9 @@ test('merges only Auction Ledger history without reviving legacy remote observat
   const snapshots = JSON.parse(await readFile(f.outputPath, 'utf8')).snapshots;
   assert.equal(snapshots.length, 2);
   assert.ok(snapshots.every(s=>s.source==='Auction Ledger'));
-  assert.equal(snapshots.find(s => s.realm === 'Realm').items[0].minBuyout, 120);
-  assert.equal(snapshots.find(s => s.realm === 'Remote Realm').items[0].minBuyout, 90);
+  assert.equal(snapshots.find(s => s.timestamp.startsWith('2024-02-01')).items[0].minBuyout, 120);
+  assert.equal(snapshots.find(s => s.timestamp.startsWith('2024-01-01')).items[0].minBuyout, 90);
+  assert.ok(snapshots.every(s=>s.realm==='Auction House'&&s.faction==='Faction'));
 });
 
 test('loads SHA-256 addressed snapshots from the remote archive index', async t => {
