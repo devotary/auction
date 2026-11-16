@@ -280,6 +280,12 @@ function auctionator(root, options) {
   return result;
 }
 
+export function importLedger(input) {
+  const root = parseLua(input.replace(/^\uFEFF/, ''));
+  if (!root.AuctionLedgerDB) throw new Error('Expected Auction Ledger SavedVariables in AuctionLedger.lua.');
+  return ledger(root);
+}
+
 export function importText(input, filename, options = {}) {
   if (input.length > MAX_FILE_BYTES) throw new Error('File exceeds the 64 MiB import limit.');
   const extension = filename.split('.').at(-1).toLowerCase();

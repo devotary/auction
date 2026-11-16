@@ -1,6 +1,6 @@
 # Daily Auction Ledger publisher
 
-The desktop app reads Auction Ledger Scanner, Auctionator and Auctioneer SavedVariables, preserves sanitized history, calculates trends locally in Rust, and pushes only generated market JSON to GitHub Pages. No web server, database service, Tailscale or port forwarding is needed. Your PC can be off once the push completes.
+The desktop app reads only Auction Ledger Scanner SavedVariables, preserves sanitized Auction Ledger history, calculates trends locally in Rust, and pushes generated market JSON to GitHub Pages. No web server, database service, Tailscale or port forwarding is needed. Your PC can be off once the push completes.
 
 ## Daily use
 
@@ -11,16 +11,16 @@ cd /path/to/auction
 ./publish-auctions
 ```
 
-1. Finish the addon scans.
+1. Finish the Auction Ledger scans.
 2. Use `/reload` or log out so WoW writes SavedVariables.
 3. Run the publisher. It reports skipped files and whether anything changed.
 4. Open https://devotary.github.io/auction/ after GitHub Pages finishes deploying.
 
 For cross-house comparisons, scan the faction AH with `/ald scan faction` and the Neutral AH with `/ald scan neutral`, saving and reloading after each. The scanner reads only the currently open house and the full-scan cooldown still applies between requests. Run **Auction Ledger Flips** or `./publish-flips` to publish. Both launchers use this same pipeline and update the **Flips** tab as well as normal trends.
 
-Configure SavedVariables paths, the fallback faction for Auctionator markets, and the game timezone in ignored `.local/publisher/config.json`. The scanner's file is optional until WoW first saves it. The scanner and Auctioneer use their explicitly saved faction and timestamps.
+Configure the `AuctionLedger.lua` SavedVariables path in ignored `.local/publisher/config.json`. The scanner's file is optional until WoW first saves it. Its saved faction and timestamps identify each observation. Legacy input entries for other addons are skipped before their files are read.
 
-The included [scanner addon](addon/README.md) captures observed listing quantities and prices using the Forever 1.60.1 replicate API. Auctionator supplies existing prices and daily history; Auctioneer exports are also supported. No supply counts or sales are invented.
+The included [scanner addon](addon/README.md) captures observed listing quantities and prices using the Forever 1.60.1 replicate API. Auctionator cache, daily lows, Auctioneer exports and CSV/JSON inputs do not feed publishing. No supply counts or sales are invented. This does not change the addon's in-game Auctionator tooltip integration.
 
 ## Preview and configuration
 
@@ -31,7 +31,7 @@ The included [scanner addon](addon/README.md) captures observed listing quantiti
 
 Preview updates the private local history and produces JSON under `.local/publisher/preview/data/`. It does not change addon files, commit, or push.
 
-Requirements: Git, OpenSSH, Node.js 24+, and Rust/Cargo 1.89+ to compile. Daily runs use the compiled Rust binary and the existing Node decoder; there are no npm dependencies. Rust handles trend/index/median/spread calculation, report generation and Git orchestration. Node reuses the tested literal Lua/CBOR/CSV decoder. Neither executes Lua.
+Requirements: Git, OpenSSH, Node.js 24+, and Rust/Cargo 1.89+ to compile. Daily runs use the compiled Rust binary and the existing Node decoder; there are no npm dependencies. Rust handles trend/index/median/spread calculation, report generation and Git orchestration. Node uses the tested literal Lua decoder. Neither executes Lua.
 
 The launcher checks for Rust changes and rebuilds when needed. To build explicitly:
 
@@ -39,17 +39,15 @@ The launcher checks for Rust changes and rebuilds when needed. To build explicit
 cargo build --release --locked --manifest-path publisher/Cargo.toml
 ```
 
-Create `.local/publisher/config.json` with absolute paths for your installation. Set `timezone` to the game's timezone; the value below is an example.
+Create `.local/publisher/config.json` with absolute paths for your installation.
 
 ```json
 {
   "repository": "git@github.com:devotary/auction.git",
   "deployKey": "/absolute/path/to/private-deploy-key",
-  "timezone": "Etc/UTC",
   "flipFees": {"factionPercent": 5, "neutralPercent": 15},
   "inputs": [
-    {"path": "/absolute/path/to/AuctionLedger.lua", "optional": true},
-    {"path": "/absolute/path/to/Auctionator.lua", "faction": "Alliance"}
+    {"path": "/absolute/path/to/AuctionLedger.lua", "optional": true}
   ]
 }
 ```
@@ -69,15 +67,15 @@ Pages loads one market/period report at a time. It draws charts, filters/sorts d
 
 Metrics use every relevant observation. Item charts show at most 32 evenly spaced measured points; market charts show at most 365. The site labels sampling when applicable. These limits keep long histories practical on mobile. Complete observations remain in the archive. A report over 90 MiB is rejected rather than pushed as an oversized Git file.
 
-All prices are copper. Realm, faction and source remain separate. Baseline, fixed-basket index, observed medians, price swings, availability and hypothetical 5% resale spreads follow the documented [market definitions](README.md#reading-the-ledger). No claim of confirmed sales or realized net gold is derived from scan disappearance. Cached prices can predate capture time; daily lows are separate day buckets.
+All prices are copper. Realm and faction remain separate. Baseline, fixed-basket index, observed medians, price swings, availability and hypothetical 5% resale spreads follow the documented [market definitions](README.md#reading-the-ledger). No claim of confirmed sales or realized net gold is derived from scan disappearance.
 
 Cross-house comparisons use only the latest Auction Ledger Scanner snapshot per realm and house. Auctionator caches, daily lows, Auctioneer data and unknown house labels are excluded from flips. Item keys and item IDs must match exactly; variants are not collapsed. Both routes are tested, with `floor(destination unit price × (100 − destination fee) / 100) − buy unit price` as the conservative copper margin. Only positive margins are published. Total listed supply is never multiplied by the cheapest price to invent an available trade size. Both scan times and partial coverage are retained. The browser filters by age at viewing time and defaults to 24 hours; it does not calculate the cross-house margins. Click **Return on cost** to toggle high/low order, or use **Sort by** on any screen size. **Max return (%)** optionally hides comparisons above a chosen percentage; leave it empty for no limit. This filters the display without changing scan history. It cannot establish whether an asking price is realistic or an item will sell.
 
-Only aggregate market fields are exported. Raw Lua, seller/character/account information, addon settings, local paths and credentials stay off the site. Published market data is public. Source reads are checked for concurrent changes and capped at 64 MiB per input. A malformed file aborts preparation without replacing saved history. An absent optional input, an empty Auctioneer file, or a scanner file with no saved buyout observations is skipped with a message. Identical Auctionator cache contents do not create another fake observation just because the file was rewritten.
+Only aggregate market fields are exported. Raw Lua, seller/character/account information, addon settings, local paths and credentials stay off the site. Published market data is public. Source reads are checked for concurrent changes and capped at 64 MiB per input. A malformed Auction Ledger file aborts preparation without replacing saved history. An absent optional scanner file, or one with no saved buyout observations, is skipped with a message. A file named `AuctionLedger.lua` must contain Auction Ledger SavedVariables; renaming another export does not make it acceptable.
 
 ## History, retries and recovery
 
-`.local/publisher/history.json` is the complete sanitized local archive. Back it up. A fresh setup can restore history from the remote snapshot archive. Published remote snapshots are merged before local history and current scans; a local correction at the same identity wins.
+`.local/publisher/history.json` is the sanitized Auction Ledger archive. Back it up. A fresh setup can restore Auction Ledger history from the remote snapshot archive. Published remote snapshots are merged before local history and current scans; a local correction at the same identity wins. Non-Auction Ledger history is excluded from this active archive and new reports, so older cache markets cannot reappear on the next run. Previously published immutable files remain available for existing links.
 
 Publishing uses its own checkout in `.local/publisher/checkout/`. It fetches and fast-forwards `main`, stages only generated history/report paths, and pushes normally. It never switches your development branch or force-pushes. A process lock prevents overlapping runs. Repeated unchanged runs do not create a commit. If a push fails, history and the local commit remain available; rerun to retry.
 
@@ -96,4 +94,4 @@ node --test tests/*.test.mjs
 node scripts/build.mjs
 ```
 
-Checks cover parser safety, read-only imports, atomic failure, cache deduplication, remote archive/hash validation, Rust/JavaScript calculation parity, stable reports, a complete push to a temporary Git repository, and a second unchanged run. Publisher integration checks require the release binary; build it first.
+Checks cover parser safety, Auction Ledger-only inputs and history, read-only imports, atomic failure, remote archive/hash validation, Rust/JavaScript calculation parity, stable reports, a complete push to a temporary Git repository, and a second unchanged run. Publisher integration checks require the release binary; build it first.

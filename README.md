@@ -6,14 +6,14 @@ The Auction Ledger turns World of Warcraft Auction House scans into a compact ma
 
 ## Publish a scan
 
-Use the included [Auction Ledger Scanner](addon/README.md): open the Auction House and enter `/ald scan`. You can use **Stop and Save** (`/ald save`) to keep a partial scan early. When it reports saved rows, use `/reload` or log out so WoW writes the file. The publisher also supports Auctionator and Auctioneer exports. Launch **Auction Ledger Publisher** from the application menu, or run:
+Use the included [Auction Ledger Scanner](addon/README.md): open the Auction House and enter `/ald scan`. You can use **Stop and Save** (`/ald save`) to keep a partial scan early. When it reports saved rows, use `/reload` or log out so WoW writes the file. Publishing uses only Auction Ledger scans. Launch **Auction Ledger Publisher** from the application menu, or run:
 
 ```sh
 cd /path/to/auction
 ./publish-auctions
 ```
 
-The publisher reads the addon files locally. Node.js safely decodes their saved data and merges sanitized history. Rust calculates the reports. The app pushes only generated market data through the repository deploy key. Your original addon files and credentials stay on your PC.
+The publisher reads `AuctionLedger.lua` locally. Node.js safely decodes its saved data and merges sanitized Auction Ledger history. Rust calculates the reports. The app pushes only generated market data through the repository deploy key. Your original addon files and credentials stay on your PC.
 
 Click **Scan** on the Auction House window, or enter `/ald`, to open the scanner menu. It shows the detected house and offers **Scan current**. Unknown auctioneers need a manual Faction or Neutral choice; a saved manual scan teaches that NPC for next time. ALD supplies saved prices to Auctionator's existing **Auction** tooltip line, which updates on save. Auctionator handles coin icons, **Vendor** values, and Shift-hover stack totals. Only ALD needs to scan; publishing updates the website.
 
@@ -44,12 +44,12 @@ The interface uses Classic WoW artwork throughout: stone and parchment surfaces,
 - **Unit buyout** is the cheapest observed stack price divided by its stack size.
 - **Price change** compares the latest price with a reference scan at or before the selected lookback. If no scan reaches that date, the earliest available scan is used.
 - **Market index** compares a fixed, equal-weight basket of items present at both endpoints. It is normalized to 100 at the reference scan; it is not total market value.
-- **Listed supply** counts observed buyout units. Missing counts remain unknown. Auctionator daily maximum availability is not current supply.
+- **Listed supply** counts observed buyout units. Partial scans can miss listings, and listed supply does not establish sales volume.
 - **Potential spread** compares the current minimum with 95% of the observed median. It is hypothetical and does not account for fillable depth, lost deposits, or a guaranteed sale.
 
 An auction that disappears might have sold, expired, or been cancelled. The Ledger cannot identify confirmed sales or realized profit from these scans.
 
-Realm, faction, and source remain separate. Auctionator cache prices can be older than their capture time; daily lows are separate day buckets. The publisher reports an empty Auctioneer scan and skips it rather than creating prices or supply that were not observed.
+Realm and faction remain separate. Only saved Auction Ledger observations feed current reports. Legacy Auctionator and Auctioneer inputs and history are excluded from publishing; the in-game Auctionator tooltip integration remains available.
 
 ## Development
 

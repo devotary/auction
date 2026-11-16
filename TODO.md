@@ -18,6 +18,7 @@
 - [x] Add a Scan button to the Auction House window that opens the ALD menu.
 - [x] Raise the conservative scan storage budget, save partial results at safety limits, and prioritize loaded/new rows during bounded retries.
 - [x] Align scanner and publisher limits at 500,000 listing rows and verify a 300,000-row scan through import.
+- [x] Restrict publishing and active reports to Auction Ledger inputs and history.
 - [ ] Verify the first paired Faction and Neutral scans using the updated in-game buttons.
 - [ ] Verify automatic house recognition, the AH Scan button, and Auctionator price/Shift stack totals in the Forever client.
 - [ ] Verify a large in-game scan with the revised storage budget and remaining-data diagnostics.

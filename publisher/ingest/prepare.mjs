@@ -2,7 +2,7 @@ import { readFile, stat, writeFile, rename, rm } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
-import { importText } from './importer.mjs';
+import { importLedger } from './importer.mjs';
 import { catalog, mergeSnapshots, MAX_FILE_BYTES } from './market.mjs';
 
 async function readStable(path) {
@@ -15,19 +15,15 @@ async function readStable(path) {
       before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || bytes.length !== before.size) {
     throw new Error('Input changed while it was being read.');
   }
-  const input = path.toLowerCase().endsWith('.lua')
-    ? bytes.toString('latin1')
-    : new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  return { input, mtime: before.mtime };
+  return bytes.toString('latin1');
 }
 
-const sameItems = (a, b) => JSON.stringify([...a.items].sort((x, y) => x.key.localeCompare(y.key))) ===
-  JSON.stringify([...b.items].sort((x, y) => x.key.localeCompare(y.key)));
-const market = s => JSON.stringify([s.realm, s.faction, s.source]);
+const isLedger = snapshot => snapshot?.source === 'Auction Ledger';
 
 export async function prepare({ config, historyPath, outputPath, remoteHistoryPath }) {
   if (!config || !Array.isArray(config.inputs) || !config.inputs.length) throw new Error('Config needs a nonempty inputs array.');
   if (config.inputs.some(input => !input || typeof input.path !== 'string' || !isAbsolute(input.path))) throw new Error('Each input needs an absolute file path.');
+  if (!config.inputs.some(input => basename(input.path) === 'AuctionLedger.lua')) throw new Error('Config needs an AuctionLedger.lua input.');
   const output = resolve(outputPath);
   const sources = config.inputs.map(input => resolve(input.path));
   if (sources.includes(output)) throw new Error('Output path cannot replace an addon source file.');
@@ -52,43 +48,27 @@ export async function prepare({ config, historyPath, outputPath, remoteHistoryPa
   };
   const remote = remoteHistoryPath ? await readHistory(remoteHistoryPath) : [];
   const local = await readHistory(historyPath);
-  let snapshots = mergeSnapshots(remote, local);
+  let snapshots = mergeSnapshots(remote.filter(isLedger), local.filter(isLedger));
   const warnings = [];
+  if ([...remote, ...local].some(snapshot => !isLedger(snapshot))) warnings.push('Non-Auction Ledger history excluded from active reports.');
   let importedCount = 0;
 
   for (const [index, inputConfig] of config.inputs.entries()) {
     const path = sources[index];
+    if (basename(path) !== 'AuctionLedger.lua') {
+      warnings.push(`Input ${index + 1}: skipped; publishing accepts only AuctionLedger.lua.`);
+      continue;
+    }
     let source;
     try { source=await readStable(path); }
     catch(error) {
       if(inputConfig.optional===true && error.code==='ENOENT'){warnings.push(`Input ${index+1}: optional scan file is not saved yet.`);continue;}
       throw error;
     }
-    const {input,mtime}=source;
-    try {
-      const incoming = importText(input, basename(path), {
-        realm: inputConfig.realm,
-        faction: inputConfig.faction || 'Shared',
-        timestamp: mtime.toISOString(),
-      });
-      const accepted = [];
-      if(!incoming.length)warnings.push(`Input ${index+1}: no saved buyout observations yet. Complete a scan and /reload.`);
-      for (const snapshot of incoming) {
-        if (snapshot.source === 'Auctionator cache') {
-          const latest = [...snapshots, ...accepted]
-            .filter(s => market(s) === market(snapshot) && s.source === snapshot.source)
-            .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))[0];
-          if (latest && sameItems(latest, snapshot)) continue;
-        }
-        accepted.push(snapshot);
-      }
-      importedCount += accepted.length;
-      snapshots = mergeSnapshots(snapshots, accepted);
-    } catch (error) {
-      if (error.message === 'Auctioneer file contains no buyout listings. Run a scan, then log out to save it.') {
-        warnings.push(`Input ${index + 1}: skipped Auctioneer file with no buyout listings.`);
-      } else throw error;
-    }
+    const incoming = importLedger(source);
+    if (!incoming.length) warnings.push(`Input ${index + 1}: no saved buyout observations yet. Complete a scan and /reload.`);
+    importedCount += incoming.length;
+    snapshots = mergeSnapshots(snapshots, incoming);
   }
 
   const payload = JSON.stringify({ version: 1, snapshots });

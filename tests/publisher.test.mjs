@@ -50,7 +50,7 @@ test('daily publisher pushes only sanitized generated files and repeated runs ma
   const folder=await mkdtemp('/tmp/auction-push-test-');
   const source=join(folder,'source'),remote=join(folder,'remote.git'),state=join(folder,'private');
   await mkdir(join(source,'data'),{recursive:true});await mkdir(state);
-  const snapshot={realm:'Test',faction:'Alliance',source:'CSV',timestamp:'2026-01-01T00:00:00.000Z',coverage:'partial',items:[{itemId:13463,key:'13463',name:'Dreamfoil',icon:'inv_misc_herb_dreamfoil',category:'Trade goods',quality:1,minBuyout:100,medianBuyout:100,quantity:10,listings:1}]};
+  const snapshot={realm:'Test',faction:'Alliance',source:'Auctionator cache',timestamp:'2026-01-01T00:00:00.000Z',coverage:'partial',items:[{itemId:13463,key:'13463',name:'Dreamfoil',icon:'inv_misc_herb_dreamfoil',category:'Trade goods',quality:1,minBuyout:100,medianBuyout:100,quantity:10,listings:1}]};
   try{
     git(source,'init','-b','main');git(source,'config','user.name','Publisher test');git(source,'config','user.email','test@example.invalid');
     const bytes=Buffer.from(JSON.stringify(snapshot)),hash=createHash('sha256').update(bytes).digest('hex');
@@ -65,15 +65,17 @@ test('daily publisher pushes only sanitized generated files and repeated runs ma
     const addon=join(folder,'AuctionLedger.lua');
     execFileSync('lua5.1',['tests/addon.test.lua',join(folder,'legacy.lua'),join(folder,'partial.lua'),addon]);
     const addonBefore=await readFile(addon,'utf8');
-    await writeFile(config,JSON.stringify({repository:remote,deployKey:key,inputs:[{path:input},{path:addon}]}));
+    await writeFile(config,JSON.stringify({repository:remote,deployKey:key,inputs:[{path:input},{path:join(folder,'Auctionator.lua')},{path:addon}]}));
     const invoke=()=>spawnSync(binary,['--config',config],{encoding:'utf8'});
     let result=invoke();assert.equal(result.status,0,result.stderr);assert.match(result.stdout,/Published to main/);
     let head=git(remote,'rev-parse','main');
     const files=git(remote,'diff-tree','--no-commit-id','--name-only','-r',head).split('\n');
     assert.ok(files.every(f=>/^data\/(history|reports)\/[a-f0-9]{64}\.json$/.test(f)||['data/trends.json','data/history.json'].includes(f)));
     const archive=git(remote,'show','main:data/history.json');assert.doesNotMatch(archive,/DO_NOT_PUBLISH|scan.csv|fake-key/);
-    const manifest=JSON.parse(archive);assert.equal(manifest.snapshots.length,5);
+    const manifest=JSON.parse(archive);assert.equal(manifest.snapshots.length,3);
+    assert.ok(manifest.snapshots.every(s=>s.source==='Auction Ledger'));
     const trends=JSON.parse(git(remote,'show','main:data/trends.json'));
+    assert.ok(trends.markets.every(m=>m.source==='Auction Ledger'));
     const ownMarket=trends.markets.find(m=>m.source==='Auction Ledger');assert.ok(ownMarket);
     const ownReport=JSON.parse(git(remote,'show',`main:${ownMarket.periods['7']}`));
     assert.equal(ownReport.summary.listedSupply,30);assert.equal(ownReport.items[0].listings,2);
