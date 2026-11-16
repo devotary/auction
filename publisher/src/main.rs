@@ -1,3 +1,4 @@
+mod flips;
 mod report;
 use serde::Deserialize;
 #[cfg(unix)]
@@ -17,6 +18,8 @@ struct Config {
     deploy_key: PathBuf,
     #[serde(default)]
     timezone: Option<String>,
+    #[serde(default)]
+    flip_fees: flips::Fees,
 }
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -90,7 +93,11 @@ fn execute() -> Result<()> {
         if args.len() != 3 {
             return Err("Usage: --build HISTORY_JSON OUTPUT_DATA_DIR".into());
         }
-        let report = report::build(Path::new(&args[1]), Path::new(&args[2]))?;
+        let report = report::build(
+            Path::new(&args[1]),
+            Path::new(&args[2]),
+            &flips::Fees::default(),
+        )?;
         println!(
             "Calculated {} markets in {:.2}s",
             report["markets"].as_array().unwrap().len(),
@@ -194,7 +201,7 @@ fn execute() -> Result<()> {
     if output.exists() {
         fs::remove_dir_all(&output)?;
     }
-    let manifest = report::build(&prepared, &output)?;
+    let manifest = report::build(&prepared, &output, &config.flip_fees)?;
     report::atomic_write(&history, &fs::read(&prepared)?)?;
     #[cfg(unix)]
     fs::set_permissions(&history, fs::Permissions::from_mode(0o600))?;
@@ -203,6 +210,10 @@ fn execute() -> Result<()> {
         manifest["markets"].as_array().unwrap().len(),
         manifest["snapshots"].as_array().unwrap().len(),
         started.elapsed().as_secs_f64()
+    );
+    println!(
+        "Faction ↔ Neutral comparisons prepared with {}% faction / {}% neutral sale fees.",
+        config.flip_fees.faction_percent, config.flip_fees.neutral_percent
     );
     if preview {
         println!("Preview data ready. Nothing committed or pushed.");

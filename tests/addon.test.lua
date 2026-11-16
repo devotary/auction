@@ -186,9 +186,37 @@ for n = 1, 5 do
 end
 equal(#retention.env.AuctionLedgerDB.scans, 3)
 local neutral = harness()
-neutral.rows = {{}}
+neutral.rows = {{buyout = 5000, count = 10}}
 neutral:command("scan neutral"); neutral:event("REPLICATE_ITEM_LIST_UPDATE"); neutral:advance(16)
 equal(neutral.env.AuctionLedgerDB.scans[1].faction, "Neutral")
+equal(neutral.env.AuctionLedgerDB.lastAttempt.faction, "Neutral")
+
+local buttons = harness()
+buttons.rows = {{}}
+buttons:command("")
+buttons.frames.AuctionLedgerNeutralButton.scripts.OnClick()
+equal(buttons.frames.AuctionLedgerFactionButton.enabled, false)
+equal(buttons.frames.AuctionLedgerNeutralButton.enabled, false)
+buttons:event("REPLICATE_ITEM_LIST_UPDATE"); buttons:advance(16)
+equal(buttons.env.AuctionLedgerDB.scans[1].faction, "Neutral")
+equal(buttons.frames.AuctionLedgerFactionButton.enabled, true)
+equal(buttons.frames.AuctionLedgerNeutralButton.enabled, true)
+buttons:advance(901); buttons:command("scan faction")
+buttons:event("REPLICATE_ITEM_LIST_UPDATE"); buttons:advance(16)
+equal(buttons.env.AuctionLedgerDB.scans[2].faction, "Alliance")
+for n = 1, 4 do
+    buttons:advance(901); buttons.frames.AuctionLedgerFactionButton.scripts.OnClick()
+    buttons:event("REPLICATE_ITEM_LIST_UPDATE"); buttons:advance(16)
+end
+equal(#buttons.env.AuctionLedgerDB.scans, 3)
+equal(buttons.env.AuctionLedgerDB.scans[1].faction, "Neutral") -- Repeated faction scans keep the latest other house.
+equal(buttons.env.AuctionLedgerDB.scans[3].faction, "Alliance")
+
+local unknown = harness()
+unknown.env.UnitFactionGroup = function() return nil end
+unknown:command("scan faction"); equal(unknown.requests, 0)
+unknown:command("scan neutral"); equal(unknown.requests, 1)
+unknown:command("cancel")
 
 local function literal(value)
     if type(value) == "string" then return string.format("%q", value) end
@@ -204,4 +232,8 @@ if arg[2] then
     local file = assert(io.open(arg[2], "wb"))
     file:write("AuctionLedgerDB = " .. literal(stopped.env.AuctionLedgerDB)); file:close()
 end
-print("PASS: streaming, delayed metadata, stalled cache events, stop-and-save button/command, empty saves, zero-based batches, cooldown, repeat scans, cancellation, AH close, timeout, changed list, request failure, retention and private fields")
+if arg[3] then
+    local paired = {version = 1, scans = {success.env.AuctionLedgerDB.scans[1], success.env.AuctionLedgerDB.scans[2], neutral.env.AuctionLedgerDB.scans[1]}}
+    local file = assert(io.open(arg[3], "wb")); file:write("AuctionLedgerDB = " .. literal(paired)); file:close()
+end
+print("PASS: streaming, delayed metadata, stalled cache events, stop-and-save button/command, empty saves, zero-based batches, cooldown, separate faction/neutral commands and buttons, cross-house retention, repeat scans, cancellation, AH close, timeout, changed list, request failure and private fields")

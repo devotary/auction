@@ -1,8 +1,8 @@
 ## Interface: 16001
 ## Title: Auction Ledger Scanner
 ## Notes: Read-only auction snapshots for the Auction Ledger desktop publisher. /ald
-## Author: devotary
-## Version: 0.1.1
+## Author: Auction Ledger
+## Version: 0.2.0
 ## SavedVariables: AuctionLedgerDB
 ## Category-enUS: Auctions
 ## AllowLoadGameType: forever

@@ -51,7 +51,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::rename(temporary, path)?;
     Ok(())
 }
-fn metadata(s: &Snapshot) -> Value {
+pub(crate) fn metadata(s: &Snapshot) -> Value {
     json!({"realm":s.realm,"faction":s.faction,"source":s.source,"timestamp":s.timestamp,"coverage":s.coverage,"itemCount":s.items.len()})
 }
 fn median(values: &mut [u64]) -> f64 {
@@ -177,7 +177,17 @@ fn analyze(scans: &[(i64, &Snapshot)], days: i64) -> Value {
         "summary":{"knownSupplyCount":known_supply.len(),"listedSupply":if known_supply.is_empty(){None}else{Some(known_supply.iter().sum::<u64>())},"movers":mover_keys,"positiveSpreads":spreads,"sparseScans":sparse}})
 }
 
-pub fn build(history_path: &Path, output: &Path) -> Result<Value> {
+fn save_report(output: &Path, report: &Value) -> Result<String> {
+    let bytes = serde_json::to_vec(report)?;
+    if bytes.len() > 90 * 1024 * 1024 {
+        return Err("A report exceeds 90 MiB; split this market before publishing.".into());
+    }
+    let filename = format!("{}.json", hash(&bytes));
+    atomic_write(&output.join("reports").join(&filename), &bytes)?;
+    Ok(format!("data/reports/{filename}"))
+}
+
+pub fn build(history_path: &Path, output: &Path, fees: &crate::flips::Fees) -> Result<Value> {
     let history: History = serde_json::from_slice(&fs::read(history_path)?)?;
     if history.version != 1 || history.snapshots.is_empty() {
         return Err("No supported snapshots to publish".into());
@@ -209,15 +219,10 @@ pub fn build(history_path: &Path, output: &Path) -> Result<Value> {
         let latest = scans.last().unwrap().1;
         let mut periods = BTreeMap::new();
         for days in [1, 7, 30, 36500] {
-            let bytes = serde_json::to_vec(&analyze(&scans, days))?;
-            if bytes.len() > 90 * 1024 * 1024 {
-                return Err(
-                    "A trend report exceeds 90 MiB; split this market before publishing.".into(),
-                );
-            }
-            let filename = format!("{}.json", hash(&bytes));
-            atomic_write(&output.join("reports").join(&filename), &bytes)?;
-            periods.insert(days.to_string(), format!("data/reports/{filename}"));
+            periods.insert(
+                days.to_string(),
+                save_report(output, &analyze(&scans, days))?,
+            );
         }
         markets.push(json!({"key":key,"realm":latest.realm,"faction":latest.faction,"source":latest.source,"periods":periods}));
     }
@@ -225,7 +230,11 @@ pub fn build(history_path: &Path, output: &Path) -> Result<Value> {
         &output.join("history.json"),
         &serde_json::to_vec(&json!({"version":1,"snapshots":snapshot_metadata}))?,
     )?;
-    let manifest = json!({"version":1,"engine":"rust-v1","revision":hash(&serde_json::to_vec(&history)?),"asOf":snapshot_metadata.last().unwrap()["timestamp"],"markets":markets,"snapshots":snapshot_metadata});
+    let flips = save_report(output, &crate::flips::build(&history, fees)?)?;
+    let revision = hash(&serde_json::to_vec(
+        &json!({"history":history,"flipFees":fees}),
+    )?);
+    let manifest = json!({"version":1,"engine":"rust-v1","revision":revision,"asOf":snapshot_metadata.last().unwrap()["timestamp"],"markets":markets,"snapshots":snapshot_metadata,"flips":flips});
     atomic_write(&output.join("trends.json"), &serde_json::to_vec(&manifest)?)?;
     Ok(manifest)
 }

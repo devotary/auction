@@ -1,8 +1,8 @@
 -- One user-triggered replicate request; no trading, hooks, libraries or background scans.
 local WAIT, RESOLVE, QUIET, COOLDOWN = 900, 90, 15, 900
-local MAX_ROWS, MAX_BYTES, KEEP_BYTES = 250000, 24 * 1024 * 1024, 40 * 1024 * 1024
+local MAX_ROWS, MAX_BYTES, KEEP_BYTES = 250000, 24 * 1024 * 1024, 48 * 1024 * 1024
 local events = CreateFrame("Frame", "AuctionLedgerEvents")
-local job, window, label, scanButton, saveButton, cancelButton
+local job, window, label, scanButton, neutralButton, saveButton, cancelButton
 local auctionOpen = false
 local elapsedSincePoll = 0
 
@@ -42,10 +42,10 @@ local function finish(reason, save)
     if not current then return end
     job = nil
     events:SetScript("OnUpdate", nil)
-    if scanButton then scanButton:Enable(); saveButton:Disable(); cancelButton:Disable() end
+    if scanButton then scanButton:Enable(); neutralButton:Enable(); saveButton:Disable(); cancelButton:Disable() end
     local db = database()
     if not db then return end
-    db.lastAttempt = {timestamp = time(), status = save and "saved" or "stopped", message = reason}
+    db.lastAttempt = {timestamp = time(), faction = current.faction, status = save and "saved" or "stopped", message = reason}
     if save and #current.rows > 0 then
         local version, build, _, interface = GetBuildInfo()
         local scan = {
@@ -60,10 +60,19 @@ local function finish(reason, save)
         local bytes = 0
         for _, saved in ipairs(db.scans) do bytes = bytes + (saved.estimatedBytes or KEEP_BYTES) end
         while #db.scans > 1 and (#db.scans > 3 or bytes > KEEP_BYTES) do
-            bytes = bytes - (db.scans[1].estimatedBytes or KEEP_BYTES)
-            table.remove(db.scans, 1)
+            -- Prefer replacing an older scan of the same house, keeping the other house available.
+            local remove = 1
+            for i = 1, #db.scans - 1 do
+                local duplicate = false
+                for j = i + 1, #db.scans do
+                    if db.scans[i].realm == db.scans[j].realm and db.scans[i].faction == db.scans[j].faction then duplicate = true; break end
+                end
+                if duplicate then remove = i; break end
+            end
+            bytes = bytes - (db.scans[remove].estimatedBytes or KEEP_BYTES)
+            table.remove(db.scans, remove)
         end
-        local message = ("Saved %d of %d returned rows (%d unresolved). Coverage: partial.\nUse /reload, then run Auction Ledger Publisher."):format(#scan.rows, scan.received, scan.unresolved)
+        local message = ("%s AH: saved %d of %d rows (%d unresolved). Coverage: partial.\nUse /reload, then run the desktop publisher."):format(scan.faction, #scan.rows, scan.received, scan.unresolved)
         status(message); say(message:gsub("\n", " "))
     else
         status(reason .. "\nPrevious scans kept.")
@@ -162,7 +171,7 @@ local function step()
         finish("Unresolved rows omitted after waiting for item data", #job.rows > 0); return
     end
     if now - job.began > WAIT + RESOLVE then finish("Capture timed out", false); return end
-    status(("Captured %d / %d returned rows (%d remaining)\n%ds elapsed. Stop and Save keeps captured rows.\nKeep the AH open while scanning."):format(#job.rows, total, total - #job.rows, math.floor(now - job.began)))
+    status(("%s AH: captured %d / %d rows (%d remaining)\n%ds elapsed. Stop and Save keeps captured rows.\nKeep the AH open while scanning."):format(job.faction, #job.rows, total, total - #job.rows, math.floor(now - job.began)))
 end
 
 local function start(faction)
@@ -174,17 +183,21 @@ local function start(faction)
     end
     local db = database()
     if not db then return end
+    faction = faction or UnitFactionGroup("player")
+    if faction ~= "Alliance" and faction ~= "Horde" and faction ~= "Neutral" then
+        say("Could not determine your faction. No scan started."); return
+    end
     local remaining = COOLDOWN - (time() - (db.lastResponseAt or 0))
     if remaining > 0 then say(("Full-scan cooldown: about %d more seconds."):format(remaining)); return end
     local now = GetTime()
-    job = {startedAt = time(), began = now, faction = faction or UnitFactionGroup("player") or "Shared",
+    job = {startedAt = time(), began = now, faction = faction,
         gotEvent = false, lastEvent = now, lastGrowth = now, lastProgress = now,
         total = 0, cursor = 1, nextPass = 0, bytes = 1024,
         queue = {}, retry = {}, variants = {}, rows = {}, byVariant = {}, requested = {}}
     elapsedSincePoll = 0
-    if scanButton then scanButton:Disable(); saveButton:Disable(); cancelButton:Enable() end
-    status("Waiting for the server's auction list…\nThis can take several minutes. Keep the AH open.")
-    say("Requested one full-list replication. Keep the AH open and leave other scan tools idle.")
+    if scanButton then scanButton:Disable(); neutralButton:Disable(); saveButton:Disable(); cancelButton:Enable() end
+    status(faction .. " AH: waiting for the server's auction list…\nThis can take several minutes. Keep the AH open.")
+    say(faction .. " AH scan requested. This reads the currently open AH; make sure you chose the matching house.")
     events:SetScript("OnUpdate", function(_, elapsed)
         elapsedSincePoll = elapsedSincePoll + elapsed
         if elapsedSincePoll < 0.05 then return end
@@ -199,17 +212,20 @@ end
 local function showWindow()
     if not window then
         window = CreateFrame("Frame", "AuctionLedgerWindow", UIParent, "BasicFrameTemplateWithInset")
-        window:SetSize(340, 190); window:SetPoint("CENTER"); window:SetClampedToScreen(true)
+        window:SetSize(380, 232); window:SetPoint("CENTER"); window:SetClampedToScreen(true)
         window:SetMovable(true); window:EnableMouse(true); window:RegisterForDrag("LeftButton")
         window:SetScript("OnDragStart", window.StartMoving)
         window:SetScript("OnDragStop", window.StopMovingOrSizing)
         window.TitleText:SetText("Auction Ledger Scanner")
         label = window:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        label:SetPoint("TOPLEFT", 16, -40); label:SetSize(308, 90); label:SetJustifyH("LEFT")
-        label:SetText("Open the Auction House, then scan.\nAfter saving: /reload, then run the desktop publisher.")
-        scanButton = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
-        scanButton:SetSize(98, 26); scanButton:SetPoint("BOTTOMLEFT", 16, 16); scanButton:SetText("Scan auctions")
+        label:SetPoint("TOPLEFT", 16, -40); label:SetSize(348, 96); label:SetJustifyH("LEFT")
+        label:SetText("Open the matching Auction House, then choose its scan button.\nFaction and Neutral are saved separately.\nAfter saving: /reload, then run the desktop publisher.")
+        scanButton = CreateFrame("Button", "AuctionLedgerFactionButton", window, "UIPanelButtonTemplate")
+        scanButton:SetSize(168, 26); scanButton:SetPoint("BOTTOMLEFT", 16, 52); scanButton:SetText("Scan Faction AH")
         scanButton:SetScript("OnClick", function() start() end)
+        neutralButton = CreateFrame("Button", "AuctionLedgerNeutralButton", window, "UIPanelButtonTemplate")
+        neutralButton:SetSize(168, 26); neutralButton:SetPoint("BOTTOMRIGHT", -16, 52); neutralButton:SetText("Scan Neutral AH")
+        neutralButton:SetScript("OnClick", function() start("Neutral") end)
         saveButton = CreateFrame("Button", "AuctionLedgerSaveButton", window, "UIPanelButtonTemplate")
         saveButton:SetSize(98, 26); saveButton:SetPoint("BOTTOM", 0, 16); saveButton:SetText("Stop and Save")
         saveButton:Disable(); saveButton:SetScript("OnClick", stopAndSave)
@@ -241,12 +257,12 @@ end)
 SLASH_AUCTIONLEDGER1 = "/ald"
 SlashCmdList.AUCTIONLEDGER = function(command)
     local action = (command or ""):lower():match("^%s*(.-)%s*$")
-    if action == "scan" or action == "scan neutral" then
+    if action == "scan" or action == "scan faction" or action == "scan neutral" then
         showWindow(); start(action == "scan neutral" and "Neutral" or nil)
     elseif action == "save" then stopAndSave()
     elseif action == "cancel" then finish("Cancelled", false)
     elseif action == "status" then
         local db = database()
-        if db then say(job and ("Capturing: %d / %d rows"):format(#job.rows, job.total) or ("%d saved scan(s). %s"):format(#db.scans, db.lastAttempt and db.lastAttempt.message or "No scan attempted.")) end
-    else showWindow(); say("/ald scan · /ald scan neutral · /ald save · /ald cancel · /ald status") end
+        if db then say(job and ("%s AH: capturing %d / %d rows"):format(job.faction, #job.rows, job.total) or ("%d saved scan(s). %s"):format(#db.scans, db.lastAttempt and ((db.lastAttempt.faction or "") .. " " .. db.lastAttempt.message) or "No scan attempted.")) end
+    else showWindow(); say("/ald scan faction · /ald scan neutral · /ald save · /ald cancel · /ald status") end
 end

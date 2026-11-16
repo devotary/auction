@@ -13,7 +13,9 @@ const money = value => {
   return `<span class="money">${value < 0 ? '−' : ''}${g ? `${count(g)}<span class="coin gold">g</span>` : ''}${s || g ? `${s}<span class="coin silver">s</span>` : ''}${c || (!g && !s) ? `${c}<span class="coin copper">c</span>` : ''}</span>`;
 };
 const icon = i => `<img class="item-icon quality-${i.quality}" src="assets/icons/${escape(i.icon)}.jpg" data-fallback="${escape(i.icon)}" width="36" height="36" alt="" loading="lazy">`;
-const state = {market:'', days:7, view:'overview', search:'', category:'', rank:'all', sort:'name', descending:false, page:0, current:null, report:null, loading:false};
+const views = ['overview','ledger','watchlist','flips','library'];
+const state = {market:'', days:7, view:'overview', search:'', category:'', rank:'all', sort:'name', descending:false, page:0, current:null, report:null, loading:false,
+  flipReport:null, flipPair:'', flipDirection:'all', flipSearch:'', flipSort:'margin', flipMin:0, flipHours:24, flipPage:0};
 const reportCache = new Map();
 let renderSequence = 0;
 let favorites;
@@ -52,37 +54,53 @@ function setMarketOptions() {
   $('#market-select').innerHTML = [...markets].map(([k, s]) => `<option value="${escape(k)}">${escape(s.realm)} · ${escape(s.faction)} · ${escape(s.source)}</option>`).join('');
   $('#market-select').value = state.market;
 }
+async function loadReport(path) {
+  if (!/^data\/reports\/[a-f0-9]{64}\.json$/.test(path || '')) throw new Error('This report is unavailable. Run the updated desktop publisher.');
+  if (!reportCache.has(path)) reportCache.set(path, fetch(path).then(r => { if (!r.ok) throw new Error('Could not load the calculated report.'); return r.json(); }).catch(error => {reportCache.delete(path);throw error;}));
+  return reportCache.get(path);
+}
+function setView() {
+  const library = state.view === 'library', flips = state.view === 'flips';
+  $('#overview-content').hidden = state.view !== 'overview';
+  $('#masthead').hidden = state.view !== 'overview';
+  $('#ledger-panel').hidden = library || flips;
+  $('#library-panel').hidden = !library;
+  $('#flips-panel').hidden = !flips;
+  $('.market-toolbar').hidden = library || flips;
+  $$('[data-view]').forEach(el => { if (el.dataset.view === state.view) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); });
+  $('#view-label').textContent = {overview:'Overview', ledger:'Item ledger', watchlist:'Watchlist', flips:'Cross-house flips', library:'Scans'}[state.view];
+  $('#watch-count').textContent = favorites.size;
+}
 async function render() {
   const sequence = ++renderSequence;
   setMarketOptions();
+  setView();
   state.loading = true;
-  $('#ledger-panel').inert = true; $('#overview-content').inert = true;
+  $('#ledger-panel').inert = true; $('#overview-content').inert = true; $('#flips-panel').inert = true;
   $('#data-notice').textContent = 'Loading calculated trends…';
   try {
+    if (state.view === 'flips') {
+      const report = await loadReport(state.report.flips);
+      if (sequence !== renderSequence) return;
+      if (report.version !== 1 || !Array.isArray(report.pairs)) throw new Error('Unsupported flip report. Run the updated desktop publisher.');
+      state.flipReport = report;
+      renderFlips();
+      return;
+    }
     const path = state.report.markets.find(m => m.key === state.market)?.periods[String(state.days)];
-    if (!path || !/^data\/reports\/[a-f0-9]{64}\.json$/.test(path)) throw new Error('This trend period is unavailable.');
-    if (!reportCache.has(path)) reportCache.set(path, fetch(path).then(r => { if (!r.ok) throw new Error('Could not load calculated trends.'); return r.json(); }).catch(error => {reportCache.delete(path);throw error;}));
-    const analysis = await reportCache.get(path);
+    const analysis = await loadReport(path);
     if (sequence !== renderSequence) return;
     state.analysis = analysis;
   } catch (error) {
     if (sequence === renderSequence) {
       $('#data-notice').textContent = `${error.message} Choose another period or refresh to try again.`;
-      $('#ledger-panel').hidden=true;$('#overview-content').hidden=true;
+      $('#ledger-panel').hidden=true;$('#overview-content').hidden=true;$('#flips-panel').hidden=true;
     }
     return;
   } finally {
-    if (sequence === renderSequence) { state.loading = false; $('#ledger-panel').inert = false; $('#overview-content').inert = false; }
+    if (sequence === renderSequence) { state.loading = false; $('#ledger-panel').inert = false; $('#overview-content').inert = false; $('#flips-panel').inert = false; }
   }
   const a = state.analysis;
-  const library = state.view === 'library';
-  $('#overview-content').hidden = state.view !== 'overview';
-  $('#masthead').hidden = state.view !== 'overview';
-  $('#ledger-panel').hidden = library;
-  $('#library-panel').hidden = !library;
-  $('.market-toolbar').hidden = library;
-  $$('[data-view]').forEach(el => { if (el.dataset.view === state.view) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current'); });
-  $('#view-label').textContent = {overview:'Overview', ledger:'Item ledger', watchlist:'Watchlist', library:'Scans'}[state.view];
   $$('[data-days]').forEach(el => el.setAttribute('aria-pressed', String(Number(el.dataset.days) === state.days)));
   $('#watch-count').textContent = favorites.size;
   $('#data-notice').innerHTML = `<p><strong>${count(state.report.snapshots.length)} saved scans.</strong> Latest observation: ${escape(fullDate(state.report.asOf))}.</p>`;
@@ -144,6 +162,62 @@ function renderLibrary() {
   $('#library-body').innerHTML = real.map(s => `<tr><td>${escape(fullDate(s.timestamp))}</td><td>${escape(s.realm)} · ${escape(s.faction)}</td><td>${escape(s.source)}</td><td class="number">${count(s.itemCount)}</td></tr>`).join('');
 }
 
+function renderFlips() {
+  const report = state.flipReport;
+  if (!report) return;
+  if (!report.pairs.some(pair => pair.key === state.flipPair)) state.flipPair = report.pairs[0]?.key || '';
+  $('#flip-market').innerHTML = report.pairs.map(pair => `<option value="${escape(pair.key)}">${escape(pair.realm)} · ${escape(pair.faction)}</option>`).join('');
+  $('#flip-market').value = state.flipPair;
+  $('#flip-market').disabled = !report.pairs.length;
+  const pair = report.pairs.find(pair => pair.key === state.flipPair);
+  $('#data-notice').textContent = 'Buy on one Auction House, resell on the other. These are saved observations, not live offers or confirmed sales.';
+  $('#flip-fees').textContent = `Assumed sale fees: Faction ${report.fees.factionPercent}% · Neutral ${report.fees.neutralPercent}%`;
+  $('#flip-scans').innerHTML = [['Faction', pair?.factionScan],['Neutral', pair?.neutralScan]].map(([house, scan]) => `<div><p>${house} AH${house === 'Faction' && pair ? ` · ${escape(pair.faction)}` : ''}</p><strong>${scan ? escape(fullDate(scan.timestamp)) : 'Not scanned'}</strong><small>${scan ? `${count(scan.itemCount)} item variants · ${escape(scan.coverage)} capture` : 'Open this AH and save a scan'}</small></div>`).join('');
+  const dates = [pair?.factionScan, pair?.neutralScan].map(scan => Date.parse(scan?.timestamp));
+  const missing = !pair?.factionScan || !pair?.neutralScan;
+  const now = Date.now(), future = !missing && dates.some(date => date > now + 300000);
+  const stale = !missing && (future || dates.some(date => !Number.isFinite(date) || now - date > state.flipHours * 3600000));
+  let items = missing || stale ? [] : pair.items.filter(item =>
+    (state.flipDirection === 'all' || item.direction === state.flipDirection) &&
+    (!state.flipSearch || `${item.name} ${item.itemId}`.toLowerCase().includes(state.flipSearch.toLowerCase())) &&
+    item.margin >= state.flipMin * 10000);
+  const field = state.flipSort;
+  items.sort((a, b) => (field === 'name' ? a.name.localeCompare(b.name) : field === 'buy' ? a.buy - b.buy : b[field] - a[field]) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
+  const size = 15, pages = Math.max(1, Math.ceil(items.length / size));
+  state.flipPage = Math.min(state.flipPage, pages - 1);
+  const visible = items.slice(state.flipPage * size, (state.flipPage + 1) * size);
+  $('#flip-count').textContent = `${count(items.length)} opportunities`;
+  $$('[data-flip-direction]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.flipDirection === state.flipDirection)));
+  $('#flip-body').innerHTML = visible.map(item => {
+    const route = item.direction === 'neutral-to-faction' ? 'Neutral → Faction' : 'Faction → Neutral';
+    return `<tr><td><a class="item-button" href="https://www.wowhead.com/classic/item=${item.itemId}" target="_blank" rel="noreferrer">${icon(item)}<span><span class="item-name">${escape(item.name)}</span><span class="item-meta">${escape(item.category)} · #${item.itemId}${item.key.includes(':v1:') ? ' · variant' : ''}</span></span></a></td><td class="flip-route">${route}</td><td class="number" data-label="Buy / unit">${money(item.buy)}</td><td class="number" data-label="Sell / unit">${money(item.sell)}</td><td class="number positive" data-label="Margin / unit">${money(item.margin)}<small>${item.feePercent}% sale fee included</small></td><td class="number" data-label="Return on cost">${percent(item.roi)}</td></tr>`;
+  }).join('');
+  $('#flip-empty').hidden = items.length > 0;
+  let title = 'No flips match these filters', explanation = 'Try another direction, a lower minimum margin, or a different item search.';
+  if (missing) {
+    title = !pair?.neutralScan && pair?.factionScan ? 'Scan the Neutral Auction House' : !pair?.factionScan && pair?.neutralScan ? 'Scan your Faction Auction House' : 'Scan both Auction Houses';
+    explanation = 'At the matching AH, use /ald scan faction or /ald scan neutral. Save, /reload, then run Auction Ledger Flips. Both scans must be on the same realm.';
+  } else if (future) {
+    title = 'Scan times are ahead of this device’s clock';
+    explanation = 'Check the clocks on the scanning computer and this device, then publish fresh scans. Future-dated comparisons are hidden.';
+  } else if (stale) {
+    title = 'These scans are outside your age limit';
+    explanation = 'Save and publish a fresh scan at each house, or choose a longer scan age to inspect older comparisons. Both scan times are shown above.';
+  } else if (!pair.matchedItems) {
+    title = 'No matching item variants in these scans';
+    explanation = 'Only identical item variants can be compared. Partial captures may miss items; publish another scan at each house.';
+  } else if (!pair.items.length) {
+    title = 'No positive margins after sale fees';
+    explanation = 'The shared items in these scans do not cover the destination house’s sale fee.';
+  }
+  $('#flip-empty h3').textContent = title;
+  $('#flip-empty p').textContent = explanation;
+  $('#flip-summary').textContent = `${count(pair?.matchedItems || 0)} shared item variants${items.length ? ` · showing ${state.flipPage * size + 1}–${Math.min((state.flipPage + 1) * size, items.length)} of ${count(items.length)}` : ''}`;
+  $('#flip-page-label').textContent = `${state.flipPage + 1} / ${pages}`;
+  $('#flip-previous').disabled = state.flipPage === 0;
+  $('#flip-next').disabled = state.flipPage === pages - 1;
+}
+
 function openItem(key) {
   const i = state.analysis.items.find(i => i.key === key);
   if (!i) return;
@@ -187,7 +261,16 @@ $('#calculator-form').addEventListener('input', calculate);
 $('#calculator-form').addEventListener('submit', e => e.preventDefault());
 $('#help-button').addEventListener('click', () => $('#help-dialog').showModal());
 $('#opportunities-button').addEventListener('click', () => { state.rank = 'spread'; state.sort = 'spread'; state.descending = true; state.page = 0; renderLedger(); $('#ledger-panel').scrollIntoView({behavior:'auto',block:'start'}); });
-document.addEventListener('keydown', e => { if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.target.matches('input,select,textarea') && !document.querySelector('dialog[open]')) { e.preventDefault(); if (state.view === 'library') location.hash = 'ledger'; $('#search').focus(); } });
+$('#flip-market').addEventListener('change', e => { state.flipPair = e.target.value; state.flipPage = 0; renderFlips(); });
+$('#flip-search').addEventListener('input', e => { state.flipSearch = e.target.value; state.flipPage = 0; renderFlips(); });
+$('#flip-min').addEventListener('input', e => { if (!e.target.checkValidity()) return; state.flipMin = Number(e.target.value); state.flipPage = 0; renderFlips(); });
+$('#flip-age').addEventListener('change', e => { state.flipHours = Number(e.target.value); state.flipPage = 0; renderFlips(); });
+$('#flip-sort').addEventListener('change', e => { state.flipSort = e.target.value; state.flipPage = 0; renderFlips(); });
+$$('[data-flip-direction]').forEach(button => button.addEventListener('click', () => { state.flipDirection = button.dataset.flipDirection; state.flipPage = 0; renderFlips(); }));
+$('#flip-previous').addEventListener('click', () => { state.flipPage--; renderFlips(); });
+$('#flip-next').addEventListener('click', () => { state.flipPage++; renderFlips(); });
+window.addEventListener('focus', () => { if (state.view === 'flips' && !state.loading) renderFlips(); });
+document.addEventListener('keydown', e => { if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.target.matches('input,select,textarea') && !document.querySelector('dialog[open]')) { e.preventDefault(); if (state.view === 'library') location.hash = 'ledger'; $(state.view === 'flips' ? '#flip-search' : '#search').focus(); } });
 document.addEventListener('error', e => {
   const img = e.target;
   if (!(img instanceof HTMLImageElement)) return;
@@ -197,7 +280,7 @@ document.addEventListener('error', e => {
   img.dataset.fallbackStage = 'remote';
   img.src = `https://wow.zamimg.com/images/wow/icons/large/${encodeURIComponent(name)}.jpg`;
 }, true);
-function route() { state.view = ['overview','ledger','watchlist','library'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview'; state.page = 0; if (state.analysis) render(); }
+function route() { state.view = views.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview'; state.page = 0; if (state.report) render(); }
 window.addEventListener('hashchange', route);
 async function boot() {
   $('.market-toolbar').inert=true;$('#ledger-panel').inert=true;$('#overview-content').inert=true;
@@ -207,7 +290,7 @@ async function boot() {
     state.report = await response.json();
     if (state.report.version !== 1 || !state.report.markets?.length) throw new Error('Unsupported trend report. Run the local publisher to rebuild it.');
     $('.market-toolbar').inert=false;
-    state.view = ['overview','ledger','watchlist','library'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
+    state.view = views.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
     await render();
   } catch (error) { $('#data-notice').textContent = `${error.message} Try refreshing.`; }
 }
