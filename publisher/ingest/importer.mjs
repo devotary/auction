@@ -166,7 +166,7 @@ function ledger(root) {
   for (const scan of scans) {
     if (scan?.status !== 'saved') continue; // Interrupted work is never an observation.
     const variants=scan.variants,rawRows=values(scan.rows);
-    if (!variants || typeof variants !== 'object' || rawRows.length>250000 || scan.captured!==rawRows.length || !Number.isInteger(scan.received) || scan.received<rawRows.length) throw new Error('Invalid Auction Ledger listing counts.');
+    if (!variants || typeof variants !== 'object' || rawRows.length>500000 || scan.captured!==rawRows.length || !Number.isInteger(scan.received) || scan.received<rawRows.length) throw new Error('Invalid Auction Ledger listing counts.');
     const timestamp=isoDate(scan.timestamp),startedAt=isoDate(scan.startedAt);
     if (Date.parse(startedAt)>Date.parse(timestamp)) throw new Error('Invalid Auction Ledger scan interval.');
     const metadata=new Map();

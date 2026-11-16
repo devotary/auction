@@ -2,7 +2,7 @@
 local _, ALD = ...
 local WAIT, RESOLVE, QUIET, COOLDOWN = 900, 90, 15, 900
 -- Conservative storage estimates; keep headroom below the desktop importer's 64 MiB input limit.
-local MAX_ROWS, MAX_BYTES, KEEP_BYTES = 250000, 48 * 1024 * 1024, 56 * 1024 * 1024
+local MAX_ROWS, MAX_BYTES, KEEP_BYTES = 500000, 48 * 1024 * 1024, 56 * 1024 * 1024
 local events = CreateFrame("Frame", "AuctionLedgerEvents")
 local job, window, label, scanButton, neutralButton, autoButton, saveButton, cancelButton
 local auctionOpen = false
@@ -205,7 +205,7 @@ local function step()
     if total < job.total then finish("The replicate list changed during capture; scan again later.", false); return end
     if total > MAX_ROWS then
         job.total = total
-        finish("Returned list exceeds 250,000 rows; captured rows kept as a partial scan", #job.rows > 0); return
+        finish("Returned list exceeds 500,000 rows; captured rows kept as a partial scan", #job.rows > 0); return
     end
     if total > job.total then
         -- Replicate indices are zero-based. Newly streamed rows join the current pass.

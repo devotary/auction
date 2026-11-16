@@ -296,11 +296,12 @@ equal(#large.env.AuctionLedgerDB.scans, 0)
 
 local rowLimit = harness()
 for n = 1, 500 do rowLimit.rows[n] = {} end
+rowLimit.totalOverride = 500000
 rowLimit:command("scan"); rowLimit:event("REPLICATE_ITEM_LIST_UPDATE"); rowLimit:advance(0.05)
-rowLimit.totalOverride = 250001; rowLimit:advance(0.05)
+rowLimit.totalOverride = 500001; rowLimit:advance(0.05)
 equal(rowLimit.env.AuctionLedgerDB.scans[1].captured, 400)
-equal(rowLimit.env.AuctionLedgerDB.scans[1].received, 250001)
-equal(rowLimit.env.AuctionLedgerDB.scans[1].unread, 249601)
+equal(rowLimit.env.AuctionLedgerDB.scans[1].received, 500001)
+equal(rowLimit.env.AuctionLedgerDB.scans[1].unread, 499601)
 local timeLimit = harness()
 for n = 1, 1000 do timeLimit.rows[n] = {} end
 timeLimit:command("scan"); timeLimit:event("REPLICATE_ITEM_LIST_UPDATE"); timeLimit:advance(0.05)
@@ -310,10 +311,10 @@ assert(timeLimit.env.AuctionLedgerDB.scans[1].captured > 0)
 assert(timeLimit.env.AuctionLedgerDB.scans[1].reason:find("time budget", 1, true))
 
 local fullSize = harness()
-for n = 1, 166500 do fullSize.rows[n] = {itemID = 100000 + n % 25000} end
-fullSize:command("scan"); fullSize:event("REPLICATE_ITEM_LIST_UPDATE"); fullSize:advance(30)
+for n = 1, 300000 do fullSize.rows[n] = {itemID = 100000 + n % 25000} end
+fullSize:command("scan"); fullSize:event("REPLICATE_ITEM_LIST_UPDATE"); fullSize:advance(45)
 local fullScan = fullSize.env.AuctionLedgerDB.scans[1]
-equal(fullScan.captured, 166500); equal(fullScan.unresolved, 0)
+equal(fullScan.captured, 300000); equal(fullScan.unresolved, 0)
 assert(fullScan.estimatedBytes > 24 * 1024 * 1024) -- Old storage guard rejected this valid market size.
 
 local storage = harness()
@@ -501,6 +502,10 @@ end
 if arg[3] then
     local paired = {version = 1, scans = {success.env.AuctionLedgerDB.scans[1], success.env.AuctionLedgerDB.scans[2], neutral.env.AuctionLedgerDB.scans[1]}}
     local file = assert(io.open(arg[3], "wb")); file:write("AuctionLedgerDB = " .. literal(paired)); file:close()
+end
+if arg[4] then
+    local file = assert(io.open(arg[4], "wb"))
+    file:write("AuctionLedgerDB = " .. literal({version = 1, scans = {fullScan}})); file:close()
 end
 print("PASS: streaming, large scans, storage/time partial saves, bounded item-data retries, stop-and-save, house detection, cross-house retention, native Auctionator pricing and stack/vendor totals, exact variants, bounded indexing, immediate updates, AH Scan button, cancellation and private fields")
 return harness

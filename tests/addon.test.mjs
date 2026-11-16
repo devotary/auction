@@ -10,7 +10,9 @@ test('the actual Lua addon produces private, timestamped snapshots accepted by t
   try {
     const file=join(folder,'AuctionLedger.lua');
     const partialFile=join(folder,'StoppedAuctionLedger.lua');
-    const output=execFileSync('lua5.1',['tests/addon.test.lua',file,partialFile],{encoding:'utf8'});
+    const pairedFile=join(folder,'PairedAuctionLedger.lua');
+    const largeFile=join(folder,'LargeAuctionLedger.lua');
+    const output=execFileSync('lua5.1',['tests/addon.test.lua',file,partialFile,pairedFile,largeFile],{encoding:'utf8'});
     assert.match(output,/PASS: streaming/);
     const raw=await readFile(file);
     assert.doesNotMatch(raw.toString(),/PRIVATE_/);
@@ -27,5 +29,10 @@ test('the actual Lua addon produces private, timestamped snapshots accepted by t
     assert.equal(partial.source,'Auction Ledger');assert.equal(partial.coverage,'partial');
     assert.equal(partial.items[0].quantity,5);assert.equal(partial.items[0].listings,1);
     assert.equal(partial.items[0].minBuyout,3000);
+    const [large]=importText((await readFile(largeFile)).toString('latin1'),'AuctionLedger.lua');
+    assert.equal(large.items.length,25000);
+    assert.equal(large.items.reduce((sum,item)=>sum+item.listings,0),300000);
+    assert.equal(large.items.reduce((sum,item)=>sum+item.quantity,0),6000000);
+    assert.ok(large.items.every(item=>item.minBuyout===1000 && item.medianBuyout===1000));
   }finally{await rm(folder,{recursive:true,force:true});}
 });
