@@ -10,9 +10,16 @@ local function roundPrices(prices)
     end
 end
 local function refreshTooltip()
-    if GameTooltip and GameTooltip:IsShown() and GameTooltip.RebuildFromTooltipInfo then
-        GameTooltip:RebuildFromTooltipInfo()
-    end
+    local tooltip = GameTooltip
+    if not tooltip or not tooltip:IsShown() or not tooltip.RebuildFromTooltipInfo or not tooltip.GetPrimaryTooltipData
+        or (tooltip.IsForbidden and tooltip:IsForbidden()) then return end
+    local data = tooltip:GetPrimaryTooltipData()
+    if type(data) ~= "table" then return end
+    local kind = data.type
+    local itemType = Enum and Enum.TooltipDataType and Enum.TooltipDataType.Item
+    -- Rebuilding unit/spell tooltips from addon code can pass protected values to Blizzard's handlers.
+    if itemType == nil or (issecretvalue and issecretvalue(kind)) or kind ~= itemType then return end
+    tooltip:RebuildFromTooltipInfo()
 end
 ALD.RefreshAuctionator = refreshTooltip
 local function indexSavedRows()

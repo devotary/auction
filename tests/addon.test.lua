@@ -32,7 +32,7 @@ local function harness(previous)
         equal(unit, "npc")
         return h.npc and ("Creature-0-1-0-0-" .. h.npc .. "-000001") or nil
     end
-    env.Enum = {TooltipDataType = {Item = 0}}
+    env.Enum = {TooltipDataType = {Item = 0, Spell = 1, Unit = 2}}
     env.TooltipDataProcessor = {AddTooltipPostCall = function() error("ALD must not register a separate tooltip renderer") end}
     env.Auctionator = {
         Constants = {SCAN_DAY_0 = 1577836800},
@@ -97,7 +97,7 @@ local function harness(previous)
         end
     end
     function h:tooltip(link, count)
-        local tip = {lines = {}, data = {}, link = link, count = count or 1}
+        local tip = {lines = {}, data = {type = env.Enum.TooltipDataType.Item}, link = link, count = count or 1}
         function tip:GetItem() return "Dreamfoil", self.link end
         function tip:GetName() return "GameTooltip" end
         function tip:NumLines() return #self.lines end
@@ -462,6 +462,25 @@ prices.rendererError = false
 tip = prices:tooltip(baseLink)
 local first, middle, last = tip:RebuildFromTooltipInfo()
 equal(first, "native-result"); equal(middle, nil); equal(last, "tail")
+
+local protectedTooltip = harness({version = 1, scans = {saved}})
+local nonItem = protectedTooltip:tooltip(baseLink)
+nonItem.RebuildFromTooltipInfo = function() error("must not rebuild a protected or non-item tooltip") end
+for _, kind in ipairs({protectedTooltip.env.Enum.TooltipDataType.Unit, protectedTooltip.env.Enum.TooltipDataType.Spell}) do
+    nonItem.data.type = kind
+    protectedTooltip.ald.RefreshAuctionator()
+    protectedTooltip.ald.RefreshPrices()
+    protectedTooltip:advance(0.1) -- Async indexing completion must also leave unit/spell tooltips alone.
+end
+nonItem.data = nil; protectedTooltip.ald.RefreshAuctionator()
+nonItem.data = {type = protectedTooltip.env.Enum.TooltipDataType.Item}
+protectedTooltip.env.issecretvalue = function(value) return value == nonItem.data.type end
+protectedTooltip.ald.RefreshAuctionator()
+protectedTooltip.env.issecretvalue = nil
+nonItem.IsForbidden = function() return true end
+protectedTooltip.ald.RefreshAuctionator()
+nonItem.IsForbidden = nil; nonItem.GetPrimaryTooltipData = nil
+protectedTooltip.ald.RefreshAuctionator()
 
 local bigScan = {status = "saved", realm = "Tést Realm", faction = "Alliance", timestamp = 1793534400, coverage = "partial",
     variants = {{itemString = "item:13463"}}, rows = {}}
