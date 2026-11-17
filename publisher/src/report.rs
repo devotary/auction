@@ -24,12 +24,19 @@ pub struct Item {
     pub listings: Option<u64>,
 }
 #[derive(Deserialize, Serialize)]
+pub struct Capture {
+    pub captured: u64,
+    pub received: u64,
+}
+#[derive(Deserialize, Serialize)]
 pub struct Snapshot {
     pub realm: String,
     pub faction: String,
     pub source: String,
     pub timestamp: String,
     pub coverage: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture: Option<Capture>,
     pub items: Vec<Item>,
 }
 impl Snapshot {
@@ -61,7 +68,11 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 pub(crate) fn metadata(s: &Snapshot) -> Value {
-    json!({"realm":s.realm,"faction":s.faction,"source":s.source,"timestamp":s.timestamp,"coverage":s.coverage,"itemCount":s.items.len()})
+    let mut value = json!({"realm":s.realm,"faction":s.faction,"source":s.source,"timestamp":s.timestamp,"coverage":s.coverage,"itemCount":s.items.len()});
+    if let Some(capture) = &s.capture {
+        value["capture"] = json!(capture);
+    }
+    value
 }
 fn median(values: &mut [u64]) -> f64 {
     values.sort_unstable();
@@ -83,6 +94,14 @@ fn sampled<T: Clone>(points: &[T], limit: usize) -> Vec<T> {
 
 fn analyze(scans: &[(i64, &Snapshot)], days: i64) -> Value {
     let latest = scans.last().unwrap().1;
+    // Movement compares adjacent scans, independently of the price-history lookback.
+    let previous_scan = scans.iter().rev().nth(1);
+    let hours = previous_scan
+        .map(|(t, _)| (scans.last().unwrap().0 - t) as f64 / 3_600_000.0)
+        .filter(|h| *h > 0.0);
+    let previous_items: HashMap<&str, &Item> = previous_scan
+        .map(|(_, s)| s.items.iter().map(|i| (i.key.as_str(), i)).collect())
+        .unwrap_or_default();
     let target = scans.last().unwrap().0 - days * 86_400_000;
     let baseline_index = scans
         .iter()
@@ -126,6 +145,22 @@ fn analyze(scans: &[(i64, &Snapshot)], days: i64) -> Value {
             .and_then(|p| p.quantity)
             .zip(i.quantity)
             .map(|(before, after)| after as i64 - before as i64);
+        let activity = previous_items
+            .get(i.key.as_str())
+            .filter(|p| p.item_id == i.item_id)
+            .zip(hours)
+            .and_then(|(p, hours)| {
+                p.quantity.zip(i.quantity).map(|(before, after)| {
+                    let delta = after as i64 - before as i64;
+                    let listing_change =
+                        p.listings.zip(i.listings).map(|(a, b)| b as i64 - a as i64);
+                    let percent = (before > 0).then(|| delta as f64 / before as f64 * 100.0);
+                    json!({"quantityBefore":before,"quantityAfter":after,"unitChange":delta,
+                        "unitsPerHour":delta as f64 / hours,"percentChange":percent,
+                        "percentPerHour":percent.map(|p| p / hours),"listingChange":listing_change,
+                        "listingsPerHour":listing_change.map(|n| n as f64 / hours)})
+                })
+            });
         let mut item = serde_json::to_value(i).unwrap();
         let fields = item.as_object_mut().unwrap();
         fields.insert("historyCount".into(), json!(history.len()));
@@ -133,6 +168,7 @@ fn analyze(scans: &[(i64, &Snapshot)], days: i64) -> Value {
         fields.insert("history".into(), json!(sampled(&history, 32)));
         fields.insert("change".into(), json!(change));
         fields.insert("supplyChange".into(), json!(supply_change));
+        fields.insert("activity".into(), json!(activity));
         fields.insert("reference".into(), json!(reference));
         fields.insert(
             "spread".into(),
@@ -182,7 +218,9 @@ fn analyze(scans: &[(i64, &Snapshot)], days: i64) -> Value {
         .filter(|i| i["spread"].as_i64().unwrap() > 0 && i["history"].as_array().unwrap().len() > 1)
         .count();
     let sparse = series.iter().filter(|p| p["value"].is_null()).count();
+    let matched = items.iter().filter(|i| i["activity"].is_object()).count();
     json!({"items":items,"latest":metadata(latest),"baseline":metadata(baseline),"series":sampled(&series,365),"seriesCount":series.len(),"basketSize":basket.len(),
+        "activity":{"previous":previous_scan.map(|(_,s)| metadata(s)),"latest":metadata(latest),"hours":hours,"matchedItems":matched},
         "summary":{"knownSupplyCount":known_supply.len(),"listedSupply":if known_supply.is_empty(){None}else{Some(known_supply.iter().sum::<u64>())},"movers":mover_keys,"positiveSpreads":spreads,"sparseScans":sparse}})
 }
 
@@ -270,6 +308,72 @@ pub fn build(history_path: &Path, output: &Path, fees: &crate::flips::Fees) -> R
 mod tests {
     use super::*;
     #[test]
+    fn movement_uses_adjacent_matched_counts_without_inventing_sales_or_missing_stock() {
+        let make = |date: &str, rows: &[(u64, &str, Option<u64>, Option<u64>)]| -> Snapshot {
+            serde_json::from_value(json!({"realm":"Auction House","faction":"Faction",
+                "source":"Auction Ledger","timestamp":date,"coverage":"partial",
+                "capture":{"captured":95,"received":100},
+                "items":rows.iter().map(|(id,key,quantity,listings)| json!({"itemId":id,
+                    "key":key,"name":key,"icon":"icon","category":"Other","quality":1,
+                    "minBuyout":100,"medianBuyout":100,"quantity":quantity,"listings":listings})).collect::<Vec<_>>()})).unwrap()
+        };
+        let first = make(
+            "2026-01-01T00:00:00Z",
+            &[(1, "1", Some(200), Some(20)), (2, "2", Some(100), Some(10))],
+        );
+        let previous = make(
+            "2026-01-01T02:00:00Z",
+            &[
+                (1, "1", Some(160), Some(16)),
+                (3, "3", Some(50), None),
+                (4, "4", Some(0), Some(0)),
+                (5, "5:variant-a", Some(100), Some(10)),
+                (6, "6", Some(10), Some(1)),
+            ],
+        );
+        let latest = make(
+            "2026-01-01T04:00:00Z",
+            &[
+                (1, "1", Some(120), Some(12)),
+                (2, "2", Some(10), Some(1)),
+                (3, "3", None, Some(1)),
+                (4, "4", Some(10), None),
+                (5, "5:variant-b", Some(20), Some(2)),
+                (6, "6", Some(10), Some(2)),
+            ],
+        );
+        let scans = [(0, &first), (7_200_000, &previous), (14_400_000, &latest)];
+        let report = analyze(&scans, 36500);
+        let movement = &report["items"][0]["activity"];
+        assert_eq!(report["items"][0]["supplyChange"], -80); // Price lookback is independent.
+        assert_eq!(movement["unitChange"], -40);
+        assert_eq!(movement["unitsPerHour"], -20.0);
+        assert_eq!(movement["listingChange"], -4);
+        assert_eq!(movement["listingsPerHour"], -2.0);
+        assert_eq!(movement["percentPerHour"], -12.5);
+        assert_eq!(report["activity"]["hours"], 2.0);
+        assert_eq!(
+            report["activity"]["previous"]["timestamp"],
+            previous.timestamp
+        );
+        assert_eq!(report["activity"]["previous"]["capture"]["captured"], 95);
+        assert_eq!(report["activity"]["matchedItems"], 3);
+        for index in [1, 2, 4] {
+            assert!(report["items"][index]["activity"].is_null());
+        }
+        assert_eq!(report["items"][3]["activity"]["unitsPerHour"], 5.0);
+        assert!(report["items"][3]["activity"]["percentPerHour"].is_null());
+        assert!(report["items"][3]["activity"]["listingChange"].is_null());
+        assert_eq!(report["items"][5]["activity"]["unitChange"], 0);
+        assert_eq!(report["items"][5]["activity"]["listingChange"], 1);
+        let only = analyze(&scans[2..], 1);
+        assert!(only["activity"]["hours"].is_null());
+        assert!(only["items"][0]["activity"].is_null());
+        let same_time = analyze(&[(0, &previous), (0, &latest)], 1);
+        assert!(same_time["items"][0]["activity"].is_null());
+    }
+
+    #[test]
     fn sampling_keeps_real_endpoints_and_metrics_use_full_history() {
         let indices: Vec<usize> = sampled(&(0..70).collect::<Vec<_>>(), 32);
         assert_eq!(indices.first(), Some(&0));
@@ -300,6 +404,7 @@ mod tests {
                 source: "CSV".into(),
                 timestamp: n.to_string(),
                 coverage: "partial".into(),
+                capture: None,
                 items: vec![item],
             });
         }
@@ -322,6 +427,7 @@ mod tests {
             source: "Auctioneer".into(),
             timestamp: date.into(),
             coverage: "partial".into(),
+            capture: None,
             items: prices
                 .iter()
                 .map(|(id, price, quantity)| Item {

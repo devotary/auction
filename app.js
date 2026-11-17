@@ -4,6 +4,8 @@ const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 const escape = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const count = n => n == null ? '—' : new Intl.NumberFormat().format(n);
+const net = n => n == null ? '—' : `${n > 0 ? '+' : n < 0 ? '−' : ''}${new Intl.NumberFormat(undefined, {maximumFractionDigits:1}).format(Math.abs(n))}`;
+const interval = hours => hours == null ? 'Unknown interval' : hours < 1 / 60 ? `${count(Math.round(hours * 3600))} seconds apart` : hours < 1 ? `${new Intl.NumberFormat(undefined, {maximumFractionDigits:1}).format(hours * 60)} minutes apart` : `${new Intl.NumberFormat(undefined, {maximumFractionDigits:2}).format(hours)} hours apart`;
 const shortDate = t => new Date(t).toLocaleDateString(undefined, {month:'short', day:'numeric'});
 const fullDate = t => new Date(t).toLocaleString(undefined, {dateStyle:'medium', timeStyle:'short'});
 const percent = n => n == null ? '<span class="unknown">—</span>' : `<span class="change ${n >= 0 ? 'positive' : 'negative'}">${n >= 0 ? '+' : '−'}${Math.abs(n).toFixed(1)}%</span>`;
@@ -14,9 +16,10 @@ const money = value => {
 };
 const icon = i => `<img class="item-icon quality-${i.quality}" src="assets/icons/${escape(i.icon)}.jpg" data-fallback="${escape(i.icon)}" width="36" height="36" alt="" loading="lazy">`;
 const views = ['overview','ledger','watchlist','flips','library'];
-const state = {market:'', days:7, view:'overview', search:'', category:'', rank:'all', sort:'name', descending:false, page:0, current:null, report:null, loading:false,
+const state = {market:'', days:7, view:'overview', search:'', category:'', rank:'all', sort:'name', descending:false, activityDirection:'falling', page:0, current:null, report:null, loading:false,
   flipReport:null, flipDirection:'all', flipSearch:'', flipSort:'margin:desc', flipMin:0, flipMax:Infinity, flipHours:24, flipPage:0};
 const reportCache = new Map();
+const ledgerHead = $('#ledger-head').innerHTML;
 let renderSequence = 0;
 let favorites;
 try {
@@ -134,33 +137,56 @@ async function render() {
 }
 
 function renderLedger() {
+  const moving = state.rank === 'activity', activity = state.analysis.activity;
+  $('#activity-controls').hidden = !moving;
+  $('#activity-scans').hidden = !moving;
+  $('#activity-note').hidden = !moving;
+  $('#ledger-table').classList.toggle('movement-table', moving);
+  $('#ledger-head').innerHTML = moving ? '<tr><th class="watch-column"><span class="sr-only">Watch</span></th><th><button data-sort="name">Item ↕</button></th><th class="number"><button data-sort="unitsPerHour">Net units / h ↕</button></th><th class="number">Listed units</th><th class="number"><button data-sort="listingsPerHour">Net auctions / h ↕</button></th><th class="number"><button data-sort="minBuyout">Unit buyout ↕</button></th><th class="number"><button data-sort="percentPerHour">Net supply % / h ↕</button></th><th><span class="sr-only">Open item</span></th></tr>' : ledgerHead;
+  if (moving) {
+    $('#activity-direction').value = state.activityDirection;
+    $('#activity-sort').value = state.sort;
+    $('#activity-scans').innerHTML = [['Previous scan', activity?.previous], ['Latest scan', activity?.latest]].map(([label, scan]) => {
+      const capture = scan?.capture;
+      const detail = capture ? `${count(capture.captured)} / ${count(capture.received)} returned rows captured` : scan ? 'Capture count unavailable' : 'Save and publish a second scan of this AH';
+      return `<div><p>${label}</p><strong>${scan ? escape(fullDate(scan.timestamp)) : 'Not available'}</strong><small>${escape(detail)}${scan ? ` · ${escape(scan.coverage)} market coverage` : ''}</small></div>`;
+    }).join('');
+  }
   let items = state.analysis.items.filter(i => (!state.search || `${i.name} ${i.itemId}`.toLowerCase().includes(state.search.toLowerCase())) && (!state.category || i.category === state.category) && (state.view !== 'watchlist' || isWatched(i)));
   if (state.rank === 'spread') items = items.filter(i => i.spread > 0 && i.history.length > 1);
   if (state.rank === 'movers') items = items.filter(i => i.change != null);
   if (state.rank === 'supply') items = items.filter(i => i.quantity != null);
+  if (moving) items = items.filter(i => i.activity && (state.activityDirection === 'falling' ? i.activity.unitChange < 0 : state.activityDirection === 'growing' ? i.activity.unitChange > 0 : i.activity.unitChange !== 0 || (i.activity.listingChange ?? 0) !== 0));
   const field = state.sort;
+  const value = i => moving && ['unitsPerHour','percentPerHour','listingsPerHour'].includes(field) ? i.activity?.[field] : i[field];
   items.sort((a, b) => {
-    if (a[field] == null) return b[field] == null ? a.name.localeCompare(b.name) : 1;
-    if (b[field] == null) return -1;
-    const order = field === 'name' ? a.name.localeCompare(b.name) : (state.rank === 'movers' && field === 'change' ? Math.abs(a[field]) - Math.abs(b[field]) : a[field] - b[field]);
+    if (value(a) == null) return value(b) == null ? a.name.localeCompare(b.name) : 1;
+    if (value(b) == null) return -1;
+    const order = field === 'name' ? a.name.localeCompare(b.name) : (state.rank === 'movers' && field === 'change' ? Math.abs(value(a)) - Math.abs(value(b)) : value(a) - value(b));
     return (state.descending ? -order : order) || a.name.localeCompare(b.name);
   });
   const size = 15, pages = Math.max(1, Math.ceil(items.length / size));
   state.page = Math.min(state.page, pages - 1);
   const visible = items.slice(state.page * size, (state.page + 1) * size);
-  $('#ledger-title').firstChild.textContent = state.view === 'watchlist' ? 'Your watchlist ' : 'Item ledger ';
+  $('#ledger-title').firstChild.textContent = state.view === 'watchlist' ? 'Your watchlist ' : moving ? 'Moving fast ' : 'Item ledger ';
   $('#item-count').textContent = `${count(items.length)} items`;
   $$('[data-rank]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.rank === state.rank)));
-  $$('[data-sort]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.sort === state.sort)));
+  $$('[data-sort]').forEach(b => {
+    b.setAttribute('aria-pressed', String(b.dataset.sort === state.sort));
+    b.closest('th').setAttribute('aria-sort', b.dataset.sort === state.sort ? state.descending ? 'descending' : 'ascending' : 'none');
+  });
   $('#ranking-explainer').textContent = {
     all: 'Cheapest observed unit buyouts. Open an item for its history and resale calculator.',
     movers: 'Largest absolute changes vs the reference scan. New items without a reference are excluded.',
     supply: 'Most units listed in the latest snapshot. Listed volume is availability, not confirmed sales.',
     spread: 'Median observed minimum buyout × 95% − current minimum buyout. Per unit; excludes lost deposits. Not guaranteed profit.',
+    activity: `${state.analysis.latest.faction} AH · net buyout supply changes between the latest two scans · ${interval(activity?.hours)} · ${count(activity?.matchedItems ?? 0)} matched item variants. Price-history period does not change this interval.`,
   }[state.rank];
-  $('#ledger-body').innerHTML = visible.map(i => `<tr><td><button class="watch-button" data-watch="${escape(i.key)}" aria-pressed="${isWatched(i)}" aria-label="${isWatched(i) ? 'Unwatch' : 'Watch'} ${escape(i.name)}">${isWatched(i) ? '★' : '☆'}</button></td><td><button class="item-button" data-item="${escape(i.key)}">${icon(i)}<span><span class="item-name">${escape(i.name)}</span><span class="item-meta">${escape(i.category)} · #${i.itemId}</span></span></button></td><td class="number">${money(i.minBuyout)}</td><td class="number">${percent(i.change)}</td><td class="number supply">${count(i.quantity)}</td><td class="number ${i.spread > 0 ? 'positive' : 'unknown'}">${i.history.length > 1 ? money(i.spread) : '—'}</td><td class="number">${sparkline(i.history)}</td><td><button class="row-open" data-item="${escape(i.key)}" aria-label="View ${escape(i.name)} details">↗</button></td></tr>`).join('');
+  $('#ledger-body').innerHTML = visible.map(i => `<tr><td><button class="watch-button" data-watch="${escape(i.key)}" aria-pressed="${isWatched(i)}" aria-label="${isWatched(i) ? 'Unwatch' : 'Watch'} ${escape(i.name)}">${isWatched(i) ? '★' : '☆'}</button></td><td><button class="item-button" data-item="${escape(i.key)}">${icon(i)}<span><span class="item-name">${escape(i.name)}</span><span class="item-meta">${escape(i.category)} · #${i.itemId}</span></span></button></td>${moving ? `<td class="number activity-rate" data-label="Net units / hour">${net(i.activity.unitsPerHour)}<small>${net(i.activity.unitChange)} units between scans</small></td><td class="number" data-label="Listed units">${count(i.activity.quantityBefore)} → ${count(i.activity.quantityAfter)}</td><td class="number" data-label="Net auctions / hour">${net(i.activity.listingsPerHour)}<small>${i.activity.listingChange == null ? 'Auction counts unknown' : `${net(i.activity.listingChange)} auctions between scans`}</small></td><td class="number" data-label="Unit buyout">${money(i.minBuyout)}</td><td class="number" data-label="Net supply % / hour">${net(i.activity.percentPerHour)}${i.activity.percentPerHour == null ? '' : '%'}</td>` : `<td class="number">${money(i.minBuyout)}</td><td class="number">${percent(i.change)}</td><td class="number supply">${count(i.quantity)}</td><td class="number ${i.spread > 0 ? 'positive' : 'unknown'}">${i.history.length > 1 ? money(i.spread) : '—'}</td><td class="number">${sparkline(i.history)}</td>`}<td><button class="row-open" data-item="${escape(i.key)}" aria-label="View ${escape(i.name)} details">↗</button></td></tr>`).join('');
   $('#ledger-empty').hidden = items.length > 0;
-  $('#table-summary').textContent = items.length ? `Showing ${state.page * size + 1}–${Math.min((state.page + 1) * size, items.length)} of ${count(items.length)} · prices per unit` : 'No matching observations';
+  $('#ledger-empty h3').textContent = moving ? !activity ? 'Publish updated movement reports' : !activity.previous ? 'A second scan is needed' : 'No matching supply changes' : 'No items found';
+  $('#ledger-empty p').textContent = moving ? !activity ? 'Run the updated desktop publisher, then refresh this page.' : !activity.previous ? 'Save another scan of this AH, /reload, and run the publisher.' : 'Try another direction, category or search. Only items with quantities in both scans are compared.' : 'Try another search or add an item to your watchlist using its star.';
+  $('#table-summary').textContent = items.length ? `Showing ${state.page * size + 1}–${Math.min((state.page + 1) * size, items.length)} of ${count(items.length)} · ${moving ? 'net supply changes, not confirmed sales' : 'prices per unit'}` : 'No matching observations';
   $('#page-label').textContent = `${state.page + 1} / ${pages}`;
   $('#previous-page').disabled = state.page === 0;
   $('#next-page').disabled = state.page === pages - 1;
@@ -236,6 +262,8 @@ function openItem(key) {
   state.current = i;
   $('#item-identity').innerHTML = `<div class="item-identity">${icon(i)}<div><h2 id="item-title">${escape(i.name)}</h2><p>${escape(state.analysis.latest.faction)} AH · #${i.itemId}</p></div></div>`;
   $('#item-stats').innerHTML = `<div><p>Lowest unit buyout</p><strong>${money(i.minBuyout)}</strong></div><div><p>Change vs reference</p><strong>${percent(i.change)}</strong></div><div><p>Listed units</p><strong class="mono">${count(i.quantity)}</strong></div>`;
+  $('#item-activity').hidden = !i.activity;
+  $('#item-activity').textContent = i.activity ? `Latest supply movement: ${count(i.activity.quantityBefore)} → ${count(i.activity.quantityAfter)} units; ${net(i.activity.unitsPerHour)} units/hour. Scans ${interval(state.analysis.activity?.hours)}. Net auction count: ${net(i.activity.listingChange)}. This does not confirm sales.` : '';
   $('#item-chart').innerHTML = chart(i.history.map(h => ({timestamp:h.timestamp, value:h.price})), {price:true, id:'item-fill', label:`${i.name} minimum unit buyout history`});
   $('#item-history-note').textContent = `${i.historyCount ?? i.history.length} observations · ${fullDate(i.history[0].timestamp)} to ${fullDate(i.history.at(-1).timestamp)}.${i.historyCount > i.history.length ? ` Chart shows ${i.history.length} measured samples; metrics use all observations.` : ''}`;
   $('#calc-buy').value = (i.minBuyout / 10000).toFixed(4);
@@ -260,7 +288,7 @@ document.addEventListener('click', async event => {
     try { localStorage.setItem('auction-ledger-watchlist', JSON.stringify([...next])); favorites = next; render(); } catch { notify('Could not save watchlist. Browser storage may be disabled.'); }
   }
   if (t.dataset.days) { state.days = Number(t.dataset.days); state.page = 0; render(); }
-  if (t.dataset.rank) { state.rank = t.dataset.rank; state.sort = {all:'name',movers:'change',supply:'quantity',spread:'spread'}[state.rank]; state.descending = state.rank !== 'all'; state.page = 0; renderLedger(); }
+  if (t.dataset.rank) { state.rank = t.dataset.rank; state.sort = {all:'name',movers:'change',supply:'quantity',spread:'spread',activity:'unitsPerHour'}[state.rank]; state.descending = state.rank === 'activity' ? state.activityDirection === 'growing' : state.rank !== 'all'; state.page = 0; renderLedger(); }
   if (t.dataset.sort) { state.descending = state.sort === t.dataset.sort ? !state.descending : t.dataset.sort !== 'name'; state.sort = t.dataset.sort; state.page = 0; renderLedger(); }
 
 });
@@ -273,6 +301,9 @@ $('#calculator-form').addEventListener('input', calculate);
 $('#calculator-form').addEventListener('submit', e => e.preventDefault());
 $('#help-button').addEventListener('click', () => $('#help-dialog').showModal());
 $('#opportunities-button').addEventListener('click', () => { state.rank = 'spread'; state.sort = 'spread'; state.descending = true; state.page = 0; renderLedger(); $('#ledger-panel').scrollIntoView({behavior:'auto',block:'start'}); });
+$('#activity-button').addEventListener('click', () => { $('[data-rank="activity"]').click(); $('#ledger-panel').scrollIntoView({behavior:'auto',block:'start'}); });
+$('#activity-direction').addEventListener('change', e => { state.activityDirection = e.target.value; state.descending = state.sort === 'name' ? false : state.activityDirection === 'growing'; state.page = 0; renderLedger(); });
+$('#activity-sort').addEventListener('change', e => { state.sort = e.target.value; state.descending = state.sort === 'name' ? false : state.activityDirection === 'growing'; state.page = 0; renderLedger(); });
 $('#flip-search').addEventListener('input', e => { state.flipSearch = e.target.value; state.flipPage = 0; renderFlips(); });
 $('#flip-min').addEventListener('input', e => { if (!e.target.checkValidity()) return; state.flipMin = Number(e.target.value); state.flipPage = 0; renderFlips(); });
 $('#flip-max').addEventListener('input', e => { if (!e.target.checkValidity()) return; state.flipMax = e.target.value === '' ? Infinity : Number(e.target.value); state.flipPage = 0; renderFlips(); });

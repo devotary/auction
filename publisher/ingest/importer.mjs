@@ -187,7 +187,7 @@ function ledger(root) {
       return {...metadata.get(variant),count,buyout};
     });
     const items=aggregateListings(rows);
-    if (items.length) result.push(sanitizeSnapshot({realm:utf8(scan.realm),faction:scan.faction,source:'Auction Ledger',timestamp,coverage:'partial',items}));
+    if (items.length) result.push(sanitizeSnapshot({realm:utf8(scan.realm),faction:scan.faction,source:'Auction Ledger',timestamp,coverage:'partial',capture:{captured:scan.captured,received:scan.received},items}));
   }
   return mergeSnapshots(result);
 }

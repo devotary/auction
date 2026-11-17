@@ -35,6 +35,8 @@ For example, a 5s Neutral buy and a 10s Faction resale gives a 4s 50c unit margi
 
 The dashboard loads one AH type and one period at a time, including on mobile. Choose Faction AH or Neutral AH and 24 hours, 7 days, 30 days, or all history. Search, filter, and sort item rows; open an item to view its price history and use the lightweight trade calculator. Watchlists stay in that browser and are not published.
 
+Choose **Moving fast** in the item ledger to see which items have falling listed supply between that AH's latest two scans. The default order puts the largest net decrease in units per hour first. You can also inspect growing supply, rank by relative change or auction count, and open an item for its movement details. Both scan times and available captured/returned row counts appear above the table. The price-history period does not change this comparison interval.
+
 The app prepares trend metrics before publishing. The browser draws the charts, filters and sorts report rows, and calculates only the amounts you enter in the trade calculator. Scans are published automatically; there are no manual JSON upload or export controls on the website.
 
 The interface uses Classic WoW artwork throughout: stone and parchment surfaces, metal window frames, red and stone buttons, native tabs, checkboxes, scrollbars, and coin icons. Frames keep their corners and repeat their edges as the layout changes size.
@@ -45,6 +47,7 @@ The interface uses Classic WoW artwork throughout: stone and parchment surfaces,
 - **Price change** compares the latest price with a reference scan at or before the selected lookback. If no scan reaches that date, the earliest available scan is used.
 - **Market index** compares a fixed, equal-weight basket of items present at both endpoints. It is normalized to 100 at the reference scan; it is not total market value.
 - **Listed supply** counts observed buyout units. Partial scans can miss listings, and listed supply does not establish sales volume.
+- **Net movement** is the change in listed units or auction count divided by the hours between the latest two scans. Negative values mean falling supply; positive values mean growing supply. Only exact variants with known quantities in both scans are compared. Missing items stay unknown. This cannot separate sales, cancellations, expiry, and new listings, and partial captures can create apparent movement.
 - **Potential spread** compares the current minimum with 95% of the observed median. It is hypothetical and does not account for fillable depth, lost deposits, or a guaranteed sale.
 
 An auction that disappears might have sold, expired, or been cancelled. The Ledger cannot identify confirmed sales or realized profit from these scans.

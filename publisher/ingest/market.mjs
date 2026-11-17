@@ -73,8 +73,14 @@ export function sanitizeSnapshot(raw) {
     };
   });
   if (new Set(items.map(i => i.key)).size !== items.length) throw new Error('Duplicate item keys in snapshot. Import individual listings as CSV instead.');
+  let capture;
+  if (raw.source === 'Auction Ledger' && raw.capture != null) {
+    const captured = number(raw.capture.captured, {min: 1, max: 500000, integer: true});
+    const received = number(raw.capture.received, {min: captured, max: 1e9, integer: true});
+    capture = {captured, received};
+  }
   return {realm, faction, source: text(raw.source, 'JSON', 40), timestamp: isoDate(raw.timestamp),
-    coverage: raw.coverage === 'full' ? 'full' : 'partial', items};
+    coverage: raw.coverage === 'full' ? 'full' : 'partial', ...(capture ? {capture} : {}), items};
 }
 export function mergeSnapshots(...groups) {
   const map = new Map();

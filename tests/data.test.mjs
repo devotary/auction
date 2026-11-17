@@ -147,10 +147,21 @@ test('Auction Ledger compact rows preserve item variants, stack prices and priva
   assert.equal(scan.items.length,2);assert.equal(scan.items[0].quantity,30);assert.equal(scan.items[0].listings,2);
   assert.equal(scan.items[0].minBuyout,1000);assert.equal(scan.items[0].medianBuyout,1000);
   assert.notEqual(scan.items[1].key,scan.items[0].key);assert.ok(scan.items[1].key.length<120);
-  assert.doesNotMatch(JSON.stringify(scan),/PRIVATE_OWNER|seller|received|itemString/);
+  assert.deepEqual(scan.capture,{captured:4,received:4});
+  assert.doesNotMatch(JSON.stringify(scan),/PRIVATE_OWNER|seller|itemString/);
   assert.deepEqual(importText('AuctionLedgerDB={version=1,scans={}}','AuctionLedger.lua'),[]);
   assert.deepEqual(importText('AuctionLedgerDB={version=1,scans={{status="capturing"}}}','AuctionLedger.lua'),[]);
   for(const [from,to] of [['version=1','version=2'],['captured=4','captured=9'],['item:13463:0','item:999:0'],['1;20;20000','9;20;20000'],['1;20;20000','1;0;20000'],['1;20;20000','1;20;-20000'],[';0;4"',';0;9"']]){
     assert.throws(()=>importText(make().replace(from,to),'AuctionLedger.lua'));
   }
+});
+
+test('capture diagnostics retain only validated aggregate counts and remain optional for older history',()=>{
+  const raw={realm:'Test',faction:'Faction',source:'Auction Ledger',timestamp:date,items:[item(13463,100,20)]};
+  assert.equal(Object.hasOwn(sanitizeSnapshot(raw),'capture'),false);
+  const capture={captured:90,received:100,account:'PRIVATE_ACCOUNT',seller:'PRIVATE_SELLER'};
+  const safe=sanitizeSnapshot({...raw,capture});
+  assert.deepEqual(safe.capture,{captured:90,received:100});
+  assert.doesNotMatch(JSON.stringify(safe),/PRIVATE|account|seller/);
+  for(const capture of [{captured:101,received:100},{captured:1.5,received:2},{captured:500001,received:500001},{captured:0,received:0}])assert.throws(()=>sanitizeSnapshot({...raw,capture}));
 });
