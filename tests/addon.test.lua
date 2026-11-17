@@ -38,7 +38,7 @@ local function harness(previous)
         Constants = {SCAN_DAY_0 = 1577836800},
         Config = {Options = {SHIFT_STACK_TOOLTIPS = "shift_stack_tooltips"},
             Get = function(key) return h.config[key] end, Set = function(key, value) h.config[key] = value end},
-        Database = {GetFirstPrice = function() return 777 end, GetPriceAge = function() return 42 end,
+        Database = {GetFirstPrice = function() return h.nativePrice or 777 end, GetPriceAge = function() return 42 end,
             GetMeanPrice = function() return 888 end},
         Tooltip = {},
     }
@@ -134,6 +134,8 @@ equal(success.requests, 1)
 equal(#success.env.AuctionLedgerDB.scans, 1)
 local saved = success.env.AuctionLedgerDB.scans[1]
 equal(saved.coverage, "partial"); equal(saved.captured, 2); equal(saved.unresolved, 0)
+equal(saved.captureComplete, true)
+assert(success.messages[#success.messages]:find("Capture complete", 1, true))
 equal(#saved.variants, 1) -- Per-instance unique IDs do not split fungible items.
 equal(saved.variants[1].itemString, "item:13463")
 equal(saved.rows[1], "1;20;20000;100;0;4")
@@ -148,11 +150,29 @@ local streamed = harness()
 streamed.rows = {{}}
 streamed:command("scan"); streamed:event("REPLICATE_ITEM_LIST_UPDATE"); streamed:advance(10)
 equal(#streamed.env.AuctionLedgerDB.scans, 0)
+equal(streamed.frames.AuctionLedgerSaveButton.text, "Save now")
+streamed:command("status")
+assert(streamed.messages[#streamed.messages]:find("cataloging complete", 1, true))
+assert(streamed.messages[#streamed.messages]:find("autosave in", 1, true))
 streamed.rows[2] = {buyout = 30000}
 streamed:event("REPLICATE_ITEM_LIST_UPDATE"); streamed:advance(10)
 equal(#streamed.env.AuctionLedgerDB.scans, 0)
 streamed:advance(6)
 equal(streamed.env.AuctionLedgerDB.scans[1].captured, 2)
+
+local saveComplete = harness(); saveComplete.rows = {{}}
+saveComplete:command("scan"); saveComplete:event("REPLICATE_ITEM_LIST_UPDATE"); saveComplete:advance(1)
+saveComplete.frames.AuctionLedgerSaveButton.scripts.OnClick()
+equal(saveComplete.env.AuctionLedgerDB.scans[1].captureComplete, true)
+equal(saveComplete.env.AuctionLedgerDB.scans[1].reason, "All returned rows captured; saved by user")
+equal(saveComplete.frame.scripts.OnUpdate, nil)
+local saveGrowth = harness(); saveGrowth.rows = {{}}
+saveGrowth:command("scan"); saveGrowth:event("REPLICATE_ITEM_LIST_UPDATE"); saveGrowth:advance(1)
+saveGrowth.rows[2] = {} -- A new row arrives between the last poll and a manual save.
+saveGrowth:command("save")
+equal(saveGrowth.env.AuctionLedgerDB.scans[1].captureComplete, false)
+equal(saveGrowth.env.AuctionLedgerDB.scans[1].received, 2)
+equal(saveGrowth.env.AuctionLedgerDB.scans[1].unread, 1)
 
 local delayed = harness()
 delayed.rows = {{}, {pending = true}}
@@ -169,6 +189,7 @@ unresolved:command("scan"); unresolved:event("REPLICATE_ITEM_LIST_UPDATE"); unre
 equal(unresolved.env.AuctionLedgerDB.scans[1].captured, 1)
 equal(unresolved.env.AuctionLedgerDB.scans[1].unresolved, 1)
 equal(unresolved.env.AuctionLedgerDB.scans[1].coverage, "partial")
+equal(unresolved.env.AuctionLedgerDB.scans[1].captureComplete, false)
 
 local notified = harness()
 notified.rows = {{}, {pending = true}}
@@ -315,6 +336,7 @@ for n = 1, 300000 do fullSize.rows[n] = {itemID = 100000 + n % 25000} end
 fullSize:command("scan"); fullSize:event("REPLICATE_ITEM_LIST_UPDATE"); fullSize:advance(45)
 local fullScan = fullSize.env.AuctionLedgerDB.scans[1]
 equal(fullScan.captured, 300000); equal(fullScan.unresolved, 0)
+equal(fullScan.captureComplete, true); equal(fullSize.frame.scripts.OnUpdate, nil)
 assert(fullScan.estimatedBytes > 24 * 1024 * 1024) -- Old storage guard rejected this valid market size.
 
 local storage = harness()
@@ -404,7 +426,7 @@ local prices = harness({version = 1, scans = {saved, success.env.AuctionLedgerDB
 prices.clock = 2000
 local baseLink = "|cffffffff|Hitem:13463:0:0:0:0:0:0:999:50:0|h[Dreamfoil]|h|r"
 local tip = prices:tooltip(baseLink, 9)
-equal(#tip.lines, 2); equal(tip.lines[2].right, "777c") -- Native fallback while indexing.
+equal(#tip.lines, 2); equal(tip.lines[2].right, "Unknown") -- Do not show stale native prices while indexing.
 prices:advance(0.05)
 equal(#tip.lines, 2); equal(tip.lines[1].left, "Vendor"); equal(tip.lines[2].left, "Auction")
 equal(tip.lines[2].right, "1000c"); equal(prices.lastAge, 0)
@@ -418,13 +440,13 @@ equal(tip.lines[2].left, "Auction x9"); equal(tip.lines[2].right, "9000c")
 prices.shift = false; tip:RebuildFromTooltipInfo()
 equal(tip.lines[2].right, "1000c")
 prices.npc = 8661; prices:event("AUCTION_HOUSE_SHOW")
-equal(tip.lines[2].right, "500c"); equal(prices.lastMean, nil) -- Neutral price, no faction historical mean.
+equal(tip.lines[2].right, "1000c"); equal(prices.lastMean, 888) -- Tooltips always use Faction, even at Neutral.
 prices:event("AUCTION_HOUSE_CLOSED")
 equal(tip.lines[2].right, "1000c"); equal(prices.lastMean, 888) -- Faction outside the AH.
 prices:event("AUCTION_HOUSE_SHOW") -- Neutral remains detected until a manual Faction choice.
 prices.npc = 8670; prices:event("AUCTION_HOUSE_SHOW")
 local variantLink = "|Hitem:13463:0:0:0:0:0:-18:1:60:0|h[Different variant]|h"
-equal(prices:tooltip(variantLink).lines[2].right, "777c") -- Unobserved variant uses native fallback, not ALD base price.
+equal(prices:tooltip(variantLink).lines[2].right, "Unknown") -- Unobserved variants cannot inherit stale native or base-item prices.
 tip = prices:tooltip(baseLink)
 prices.rows = {{buyout = 30000, count = 10}, {pending = true}}
 prices:command("scan faction"); prices:event("REPLICATE_ITEM_LIST_UPDATE"); prices:advance(1)
@@ -446,27 +468,59 @@ local bigScan = {status = "saved", realm = "Tést Realm", faction = "Alliance", 
 for n = 1, 3000 do bigScan.rows[n] = "1;1;1000;0;0;0" end
 bigScan.rows[3000] = "1;1;5;0;0;0"
 local indexed = harness({version = 1, scans = {bigScan}})
-tip = indexed:tooltip(baseLink); indexed:advance(0.05); equal(tip.lines[2].right, "777c")
-indexed:advance(0.2); equal(#tip.lines, 2); equal(tip.lines[2].right, "5c")
+tip = indexed:tooltip(baseLink); indexed:advance(0.05); equal(tip.lines[2].right, "Unknown")
+for _ = 1, 3 do indexed.ald.RefreshPrices(); indexed:advance(0.05) end
+equal(#tip.lines, 2); equal(tip.lines[2].right, "5c") -- Repeated refreshes preserve indexing progress.
 tip.link = nil; tip:RebuildFromTooltipInfo(); equal(#tip.lines, 0)
 
 local foreign = harness({version = 1, scans = {{status = "saved", realm = "Other Realm", faction = "Neutral", timestamp = 1793534400,
     variants = {{itemString = "item:13463"}}, rows = {"1;1;1;0;0;0"}},
     {status = "saved", realm = "Tést Realm", faction = "Horde", timestamp = 1793534400,
-    variants = {{itemString = "item:13463"}}, rows = {"1;1;1;0;0;0"}}}})
-foreign:advance(0.1); equal(foreign:tooltip(baseLink).lines[2].right, "777c")
+    variants = {{itemString = "item:13463"}}, rows = {"1;1;2;0;0;0"}}}})
+foreign:advance(0.1); equal(foreign:tooltip(baseLink).lines[2].right, "2c") -- Faction labels share one economy.
 foreign.npc = 8661; foreign:event("AUCTION_HOUSE_SHOW")
-equal(foreign.env.GameTooltip.lines[2].right, "Unknown") -- Never substitute faction cache for an unscanned Neutral house.
+equal(foreign.env.GameTooltip.lines[2].right, "2c") -- Opening Neutral cannot switch tooltip prices.
+local onlyNeutral = harness({version = 1, scans = {neutral.env.AuctionLedgerDB.scans[1]}})
+onlyNeutral:advance(0.1); onlyNeutral:tooltip(baseLink)
+equal(onlyNeutral.env.GameTooltip.lines[2].right, "Unknown") -- Neutral observations never become tooltip prices.
+
+local olderPrices = {status = "saved", realm = "Older label", faction = "Horde", timestamp = 1793534400 - 86400, estimatedBytes = 1024,
+    variants = {{itemString = "item:13463"}, {itemString = "item:13463:0:0:0:0:0:-18"}},
+    rows = {"1;1;10;0;0;0", "2;1;500;0;0;0"}}
+local newerPrices = {status = "saved", realm = "Newer label", faction = "Alliance", timestamp = 1793534400, estimatedBytes = 1024,
+    variants = {{itemString = "item:13463"}}, rows = {"1;1;2000;0;0;0"}}
+local sparse = harness({version = 1, scans = {olderPrices, newerPrices}})
+sparse:advance(0.1)
+equal(sparse:tooltip(baseLink).lines[2].right, "2000c"); equal(sparse.lastAge, 0)
+equal(sparse:tooltip(variantLink).lines[2].right, "500c"); equal(sparse.lastAge, 1)
+sparse.rows = {{buyout = 30000, count = 10}, {pending = true}}
+sparse:command("scan"); sparse:event("REPLICATE_ITEM_LIST_UPDATE"); sparse:advance(1); sparse:command("save")
+equal(sparse:tooltip(baseLink).lines[2].right, "3000c")
+equal(sparse:tooltip(variantLink).lines[2].right, "500c"); equal(sparse.lastAge, 1) -- Missing items keep their own observation age.
+
+local bow = harness({version = 1, scans = {{status = "saved", realm = "Test label", faction = "Alliance", timestamp = 1793534400,
+    estimatedBytes = 1024, variants = {{itemString = "item:4087:0:0:0:0:0:0:0:0:0:0:0:1:12728"}},
+    rows = {"1;1;38799;0;0;4"}}}})
+bow.nativePrice = 30000
+local agilityLink = "|Hitem:4087::::::::44:1486:::1:12728::::::|h[Trueshot Bow of Agility]|h"
+tip = bow:tooltip(agilityLink); equal(tip.lines[2].right, "Unknown") -- Hide the old 3g native value while indexing.
+bow:advance(0.1); equal(tip.lines[2].right, "38799c") -- Bag links match saved bonus-based Agility variants.
+bow.rows = {{itemID = 4087, link = agilityLink, count = 1, buyout = 38699}, {pending = true}}
+bow:command("scan"); bow:event("REPLICATE_ITEM_LIST_UPDATE"); bow:advance(1); bow:command("save")
+equal(tip.lines[2].right, "38699c") -- A partial save replaces an old native Auction price immediately.
+bow:advance(901); bow.rows = {{itemID = 4087, link = agilityLink, count = 1, buyout = 1}}
+bow:command("scan neutral"); bow:event("REPLICATE_ITEM_LIST_UPDATE"); bow:advance(16)
+equal(tip.lines[2].right, "38699c") -- Saving a newer Neutral scan cannot replace the Faction price.
 
 local login = harness({version = 1, scans = {saved}})
 login.env.UnitFactionGroup = function() return nil end
 login:event("AUCTION_HOUSE_CLOSED"); login:event("ADDON_LOADED", "AuctionLedger"); login:advance(0.1)
-tip = login:tooltip(baseLink); equal(tip.lines[2].right, "777c")
+tip = login:tooltip(baseLink); equal(tip.lines[2].right, "1000c") -- Faction prices do not depend on player-faction readiness.
 login.env.UnitFactionGroup = function() return "Alliance" end
 login:event("PLAYER_LOGIN"); login:advance(0.1)
 equal(tip.lines[2].right, "1000c")
 login.env.issecretvalue = function(value) return value == baseLink end
-tip:RebuildFromTooltipInfo(); equal(tip.lines[2].right, "777c")
+tip:RebuildFromTooltipInfo(); equal(tip.lines[2].right, "Unknown")
 
 local variants = harness()
 variants.rows = {{}, {link = variantLink, buyout = 10000}}
@@ -487,7 +541,7 @@ equal(#menu:tooltip(baseLink).lines, 0)
 
 local function literal(value)
     if type(value) == "string" then return string.format("%q", value) end
-    if type(value) == "number" then return tostring(value) end
+    if type(value) == "number" or type(value) == "boolean" then return tostring(value) end
     local fields = {}
     for key, entry in pairs(value) do fields[#fields + 1] = "[" .. literal(key) .. "]=" .. literal(entry) end
     return "{" .. table.concat(fields, ",") .. "}"

@@ -13,6 +13,7 @@ local function say(message)
 end
 
 local function status(message)
+    if job then job.message = message end
     if label then label:SetText(message) end
 end
 
@@ -23,6 +24,11 @@ local function database()
         return nil
     end
     return AuctionLedgerDB
+end
+
+function ALD.House(faction)
+    if faction == "Neutral" then return "Neutral" end
+    if faction == "Alliance" or faction == "Horde" or faction == "Faction" then return "Faction" end
 end
 
 -- Exact Classic auctioneer identities. Unknown NPCs require a saved manual choice.
@@ -46,10 +52,6 @@ local function detectHouse()
     if remembered == "Faction" then return UnitFactionGroup("player"), "remembered choice" end
     if remembered == "Neutral" then return "Neutral", "remembered choice" end
     return auctioneers[id], "auctioneer identity"
-end
-function ALD.CurrentHouse()
-    if auctionOpen then return job and job.faction or detectHouse() end
-    return UnitFactionGroup("player")
 end
 local function readyWindow()
     if not autoButton or job then return end
@@ -80,7 +82,7 @@ local function finish(reason, save)
     if not current then return end
     job = nil
     events:SetScript("OnUpdate", nil)
-    if scanButton then scanButton:Enable(); neutralButton:Enable(); saveButton:Disable(); cancelButton:Disable(); readyWindow() end
+    if scanButton then scanButton:Enable(); neutralButton:Enable(); saveButton:Disable(); saveButton:SetText("Stop and Save"); cancelButton:Disable(); readyWindow() end
     local db = database()
     if not db then return end
     db.lastAttempt = {timestamp = time(), faction = current.faction, status = save and "saved" or "stopped", message = reason}
@@ -89,6 +91,7 @@ local function finish(reason, save)
         local scan = {
             status = "saved", startedAt = current.startedAt, timestamp = time(),
             realm = GetRealmName(), faction = current.faction, coverage = "partial",
+            captureComplete = #current.rows == current.total,
             api = "replicate", gameVersion = version, build = build, interface = interface,
             reason = reason, received = current.total, captured = #current.rows,
             unresolved = current.total - #current.rows,
@@ -109,7 +112,7 @@ local function finish(reason, save)
             for i = 1, #db.scans - 1 do
                 local duplicate = false
                 for j = i + 1, #db.scans do
-                    if db.scans[i].realm == db.scans[j].realm and db.scans[i].faction == db.scans[j].faction then duplicate = true; break end
+                    if ALD.House(db.scans[i].faction) == ALD.House(db.scans[j].faction) then duplicate = true; break end
                 end
                 if duplicate then remove = i; break end
             end
@@ -118,7 +121,7 @@ local function finish(reason, save)
         end
         if ALD.RefreshPrices then ALD.RefreshPrices(scan, current.prices) end
         if autoButton then if detectHouse() then autoButton:Enable() else autoButton:Disable() end end
-        local message = ("%s AH: saved %d of %d rows (%d unresolved). Coverage: partial.\n%s\nUse /reload, then run the desktop publisher."):format(scan.faction, #scan.rows, scan.received, scan.unresolved, reason)
+        local message = ("%s AH: %s\nSaved %d / %d returned rows (%d unresolved).\n%s\nUse /reload, then run the desktop publisher."):format(ALD.House(scan.faction), scan.captureComplete and "Capture complete." or "Partial capture saved.", #scan.rows, scan.received, scan.unresolved, reason)
         status(message); say(message:gsub("\n", " "))
     else
         status(reason .. "\nPrevious scans kept.")
@@ -132,7 +135,10 @@ local function stopAndSave()
         say("No rows captured yet. The scan is still running; Cancel discards it.")
         return
     end
-    finish("Stopped early by user", true)
+    local total = C_AuctionHouse.GetNumReplicateItems() or 0
+    if total < job.total then finish("The replicate list changed during capture; scan again later.", false); return end
+    job.total = total
+    finish(#job.rows == total and "All returned rows captured; saved by user" or "Stopped early by user", true)
 end
 
 local function pendingRow(index, reason, itemID)
@@ -249,15 +255,20 @@ local function step()
     if job.nextRow >= total and not job.tailSince then job.tailSince = now end
     if #job.rows == total and now - job.lastGrowth >= QUIET then
         -- No end-of-stream flag exists: a quiet list is still marked partial.
-        finish("Replicate list settled", true); return
+        finish("All returned rows captured; list settled", true); return
     end
     -- A trickle of resolved rows must not keep the entire retry phase alive indefinitely.
     if #job.rows < total and job.tailSince and now - job.tailSince >= RESOLVE then
         finish("Item-data retry budget reached; unresolved rows omitted", #job.rows > 0); return
     end
     if now - job.began > WAIT + RESOLVE then finish("Capture time budget reached; captured rows kept", #job.rows > 0); return end
-    status(("%s AH: captured %d / %d rows\nWaiting: %d item data; %d auction details\n%s\nStop and Save keeps captured rows."):format(job.faction, #job.rows, total, job.pendingCounts.item, job.pendingCounts.details,
-        job.nextRow < total and ("Reading %d more returned rows"):format(total - job.nextRow) or ("Resolving remaining data: up to %ds"):format(math.max(0, math.ceil(RESOLVE - (now - job.tailSince))))))
+    if saveButton then saveButton:SetText(#job.rows == total and "Save now" or "Stop and Save") end
+    if #job.rows == total then
+        status(("%s AH: cataloging complete (%d / %d rows).\nChecking for more rows: autosave in %ds.\nSave now keeps all captured rows."):format(ALD.House(job.faction), #job.rows, total, math.max(0, math.ceil(QUIET - (now - job.lastGrowth)))))
+    else
+        status(("%s AH: captured %d / %d rows\nWaiting: %d item data; %d auction details\n%s\nStop and Save keeps captured rows."):format(ALD.House(job.faction), #job.rows, total, job.pendingCounts.item, job.pendingCounts.details,
+            job.nextRow < total and ("Reading %d more returned rows"):format(total - job.nextRow) or ("Resolving remaining data: up to %ds"):format(math.max(0, math.ceil(RESOLVE - (now - job.tailSince))))))
+    end
 end
 
 local function start(mode)
@@ -286,7 +297,7 @@ local function start(mode)
         pendingCounts = {item = 0, details = 0}, attempts = {},
         variants = {}, rows = {}, byVariant = {}, requested = {}, prices = {}}
     elapsedSincePoll = 0
-    if scanButton then scanButton:Disable(); neutralButton:Disable(); autoButton:Disable(); saveButton:Disable(); cancelButton:Enable() end
+    if scanButton then scanButton:Disable(); neutralButton:Disable(); autoButton:Disable(); saveButton:Disable(); saveButton:SetText("Stop and Save"); cancelButton:Enable() end
     status(faction .. " AH: waiting for the server's auction list…\nThis can take several minutes. Keep the AH open.")
     say(faction .. " AH scan requested. This reads the currently open AH; make sure you chose the matching house.")
     if ALD.RefreshAuctionator then ALD.RefreshAuctionator() end
@@ -384,6 +395,6 @@ SlashCmdList.AUCTIONLEDGER = function(command)
     elseif action == "cancel" then finish("Cancelled", false)
     elseif action == "status" then
         local db = database()
-        if db then say(job and ("%s AH: capturing %d / %d rows"):format(job.faction, #job.rows, job.total) or ("%d saved scan(s). %s"):format(#db.scans, db.lastAttempt and ((db.lastAttempt.faction or "") .. " " .. db.lastAttempt.message) or "No scan attempted.")) end
+        if db then say(job and job.message:gsub("\n", " ") or ("%d saved scan(s). %s"):format(#db.scans, db.lastAttempt and ((ALD.House(db.lastAttempt.faction) or "") .. " " .. db.lastAttempt.message) or "No scan attempted.")) end
     else showWindow(); say("/ald scan faction · /ald scan neutral · /ald save · /ald cancel · /ald status") end
 end

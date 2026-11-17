@@ -23,6 +23,7 @@ local function indexSavedRows()
         local row = task.scan.rows[task.index]
         if row == nil then
             roundPrices(task.prices); task.ready = true; task.keys = nil; table.remove(tasks, 1)
+            refreshTooltip()
         else
             task.index = task.index + 1
             if type(row) == "string" then
@@ -45,46 +46,52 @@ end
 
 function ALD.RefreshPrices(saved, observed)
     if ALD.InstallAuctionatorBridge then ALD.InstallAuctionatorBridge() end
-    local db, latest, nextCache = AuctionLedgerDB, {}, {}
-    local faction, realm = UnitFactionGroup("player"), GetRealmName()
+    local db, nextCache = AuctionLedgerDB, {}
     if type(db) == "table" and db.version == 1 and type(db.scans) == "table" then
-        for _, scan in ipairs(db.scans) do
-            if type(scan) == "table" and scan.status == "saved" and scan.realm == realm and (scan.faction == "Neutral" or (faction and scan.faction == faction))
+        for index, scan in ipairs(db.scans) do
+            local house = type(scan) == "table" and ALD.House(scan.faction)
+            if house == "Faction" and scan.status == "saved"
                 and type(scan.timestamp) == "number" and type(scan.rows) == "table" and type(scan.variants) == "table" then
-                local old = latest[scan.faction]
-                if not old or scan.timestamp >= old.timestamp then latest[scan.faction] = scan end
+                local entry
+                for _, previous in ipairs(cache) do if previous.scan == scan then entry = previous; break end end
+                if not entry then
+                    entry = {scan = scan, prices = {}, keys = {}, index = 1}
+                    if scan == saved and observed then
+                        for key, price in pairs(observed) do entry.prices[key] = price end
+                        roundPrices(entry.prices); entry.ready = true
+                    end
+                end
+                entry.order = index
+                nextCache[#nextCache + 1] = entry
             end
         end
     end
+    table.sort(nextCache, function(a, b)
+        if a.scan.timestamp == b.scan.timestamp then return a.order > b.order end
+        return a.scan.timestamp > b.scan.timestamp
+    end)
     tasks = {}
-    for house, scan in pairs(latest) do
-        local entry = cache[house]
-        if not entry or entry.scan ~= scan or not entry.ready then
-            entry = {scan = scan, prices = {}, keys = {}, index = 1}
-            if scan == saved and observed then
-                for key, price in pairs(observed) do entry.prices[key] = price end
-                roundPrices(entry.prices); entry.ready = true
-            else tasks[#tasks + 1] = entry end
-        end
-        nextCache[house] = entry
-    end
+    for _, entry in ipairs(nextCache) do if not entry.ready then tasks[#tasks + 1] = entry end end
     cache = nextCache
     worker:SetScript("OnUpdate", #tasks > 0 and indexSavedRows or nil)
     refreshTooltip()
 end
 
 local function observedPrice(link)
-    local house = ALD.CurrentHouse()
     if (issecretvalue and issecretvalue(link)) or type(link) ~= "string" then return end
     local key = ALD.Variant(link)
-    local entry = cache[house]
-    local price = entry and entry.ready and key and entry.prices[key]
-    if price and entry.scan.timestamp <= time() + 300 then
-        local epoch = Auctionator.Constants and Auctionator.Constants.SCAN_DAY_0 or 0
-        local age = math.max(0, math.floor((time() - epoch) / 86400) - math.floor((entry.scan.timestamp - epoch) / 86400))
-        return price, age, house
+    for _, entry in ipairs(cache) do
+        if entry.scan.timestamp <= time() + 300 then
+            -- Do not show an older observation while a newer scan is still being indexed.
+            if not entry.ready then return end
+            local price = key and entry.prices[key]
+            if price then
+                local epoch = Auctionator.Constants and Auctionator.Constants.SCAN_DAY_0 or 0
+                local age = math.max(0, math.floor((time() - epoch) / 86400) - math.floor((entry.scan.timestamp - epoch) / 86400))
+                return price, age
+            end
+        end
     end
-    return nil, nil, house
 end
 
 local context, installedRenderer
@@ -92,8 +99,8 @@ local wrapped = setmetatable({}, {__mode = "k"})
 local function wrapDatabase(db)
     if not db or type(db.GetFirstPrice) ~= "function" or type(db.GetPriceAge) ~= "function" then return false end
     local seen = wrapped[db]
-    if seen and seen.price == db.GetFirstPrice and seen.age == db.GetPriceAge and seen.mean == db.GetMeanPrice then return true end
-    local price, age, mean = db.GetFirstPrice, db.GetPriceAge, db.GetMeanPrice
+    if seen and seen.price == db.GetFirstPrice and seen.age == db.GetPriceAge then return true end
+    local price, age = db.GetFirstPrice, db.GetPriceAge
     db.GetFirstPrice = function(self, keys, ...)
         if context and context.db == self and context.keys == keys then context.used = true; return context.price end
         return price(self, keys, ...)
@@ -102,13 +109,7 @@ local function wrapDatabase(db)
         if context and context.used and context.db == self and context.keys[1] == key then return context.age end
         return age(self, key, ...)
     end
-    if type(mean) == "function" then
-        db.GetMeanPrice = function(self, key, ...)
-            if context and context.used and context.db == self and context.house == "Neutral" and context.keys[1] == key then return nil end
-            return mean(self, key, ...)
-        end
-    end
-    wrapped[db] = {price = db.GetFirstPrice, age = db.GetPriceAge, mean = db.GetMeanPrice}
+    wrapped[db] = {price = db.GetFirstPrice, age = db.GetPriceAge}
     return true
 end
 local function restore(previous, ok, ...)
@@ -122,12 +123,12 @@ function ALD.InstallAuctionatorBridge()
     if type(render) ~= "function" then return end
     if render ~= installedRenderer then
         installedRenderer = function(tooltip, keys, link, count, ...)
-            local ok, price, age, house = pcall(observedPrice, link)
-            if not ok or type(keys) ~= "table" or #keys == 0 or (not price and house ~= "Neutral") or not wrapDatabase(addon.Database) then
+            local ok, price, age = pcall(observedPrice, link)
+            if not ok or type(keys) ~= "table" or #keys == 0 or not wrapDatabase(addon.Database) then
                 return render(tooltip, keys, link, count, ...)
             end
             local previous = context
-            context = {db = addon.Database, keys = keys, price = price, age = age, house = house}
+            context = {db = addon.Database, keys = keys, price = price, age = age}
             return restore(previous, pcall(render, tooltip, keys, link, count, ...))
         end
         addon.Tooltip.ShowTipWithPricingDBKey = installedRenderer
