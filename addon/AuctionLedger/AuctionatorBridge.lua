@@ -88,9 +88,7 @@ local function observedPrice(link)
     if (issecretvalue and issecretvalue(link)) or type(link) ~= "string" then return end
     local key = ALD.Variant(link)
     for _, entry in ipairs(cache) do
-        if entry.scan.timestamp <= time() + 300 then
-            -- Do not show an older observation while a newer scan is still being indexed.
-            if not entry.ready then return end
+        if entry.ready and entry.scan.timestamp <= time() + 300 then
             local price = key and entry.prices[key]
             if price then
                 local epoch = Auctionator.Constants and Auctionator.Constants.SCAN_DAY_0 or 0
@@ -131,7 +129,7 @@ function ALD.InstallAuctionatorBridge()
     if render ~= installedRenderer then
         installedRenderer = function(tooltip, keys, link, count, ...)
             local ok, price, age = pcall(observedPrice, link)
-            if not ok or type(keys) ~= "table" or #keys == 0 or not wrapDatabase(addon.Database) then
+            if not ok or not price or type(keys) ~= "table" or #keys == 0 or not wrapDatabase(addon.Database) then
                 return render(tooltip, keys, link, count, ...)
             end
             local previous = context

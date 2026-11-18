@@ -38,7 +38,7 @@ local function harness(previous)
         Constants = {SCAN_DAY_0 = 1577836800},
         Config = {Options = {SHIFT_STACK_TOOLTIPS = "shift_stack_tooltips"},
             Get = function(key) return h.config[key] end, Set = function(key, value) h.config[key] = value end},
-        Database = {GetFirstPrice = function() return h.nativePrice or 777 end, GetPriceAge = function() return 42 end,
+        Database = {GetFirstPrice = function() if not h.nativeMissing then return h.nativePrice or 777 end end, GetPriceAge = function() return 42 end,
             GetMeanPrice = function() return 888 end},
         Tooltip = {},
     }
@@ -426,7 +426,7 @@ local prices = harness({version = 1, scans = {saved, success.env.AuctionLedgerDB
 prices.clock = 2000
 local baseLink = "|cffffffff|Hitem:13463:0:0:0:0:0:0:999:50:0|h[Dreamfoil]|h|r"
 local tip = prices:tooltip(baseLink, 9)
-equal(#tip.lines, 2); equal(tip.lines[2].right, "Unknown") -- Do not show stale native prices while indexing.
+equal(#tip.lines, 2); equal(tip.lines[2].right, "777c"); equal(prices.lastAge, 42) -- Native price and age while indexing.
 prices:advance(0.05)
 equal(#tip.lines, 2); equal(tip.lines[1].left, "Vendor"); equal(tip.lines[2].left, "Auction")
 equal(tip.lines[2].right, "1000c"); equal(prices.lastAge, 0)
@@ -446,7 +446,15 @@ equal(tip.lines[2].right, "1000c"); equal(prices.lastMean, 888) -- Faction outsi
 prices:event("AUCTION_HOUSE_SHOW") -- Neutral remains detected until a manual Faction choice.
 prices.npc = 8670; prices:event("AUCTION_HOUSE_SHOW")
 local variantLink = "|Hitem:13463:0:0:0:0:0:-18:1:60:0|h[Different variant]|h"
-equal(prices:tooltip(variantLink).lines[2].right, "Unknown") -- Unobserved variants cannot inherit stale native or base-item prices.
+tip = prices:tooltip(variantLink, 9)
+equal(tip.lines[2].right, "777c"); equal(prices.lastAge, 42) -- Missing exact variants retain Auctionator's fallback and age.
+prices.shift = true; tip:RebuildFromTooltipInfo()
+equal(tip.lines[2].right, "6993c"); equal(tip.lines[1].right, "3240c") -- Native stack/vendor totals also work on fallback.
+prices.shift = false
+prices.nativeMissing = true
+equal(prices:tooltip(variantLink).lines[2].right, "Unknown") -- Unknown only when neither source has a price.
+equal(prices:tooltip(baseLink).lines[2].right, "1000c") -- ALD still works when the native cache has no price.
+prices.nativeMissing = false
 tip = prices:tooltip(baseLink)
 prices.rows = {{buyout = 30000, count = 10}, {pending = true}}
 prices:command("scan faction"); prices:event("REPLICATE_ITEM_LIST_UPDATE"); prices:advance(1)
@@ -487,7 +495,7 @@ local bigScan = {status = "saved", realm = "Tést Realm", faction = "Alliance", 
 for n = 1, 3000 do bigScan.rows[n] = "1;1;1000;0;0;0" end
 bigScan.rows[3000] = "1;1;5;0;0;0"
 local indexed = harness({version = 1, scans = {bigScan}})
-tip = indexed:tooltip(baseLink); indexed:advance(0.05); equal(tip.lines[2].right, "Unknown")
+tip = indexed:tooltip(baseLink); indexed:advance(0.05); equal(tip.lines[2].right, "777c")
 for _ = 1, 3 do indexed.ald.RefreshPrices(); indexed:advance(0.05) end
 equal(#tip.lines, 2); equal(tip.lines[2].right, "5c") -- Repeated refreshes preserve indexing progress.
 tip.link = nil; tip:RebuildFromTooltipInfo(); equal(#tip.lines, 0)
@@ -501,7 +509,9 @@ foreign.npc = 8661; foreign:event("AUCTION_HOUSE_SHOW")
 equal(foreign.env.GameTooltip.lines[2].right, "2c") -- Opening Neutral cannot switch tooltip prices.
 local onlyNeutral = harness({version = 1, scans = {neutral.env.AuctionLedgerDB.scans[1]}})
 onlyNeutral:advance(0.1); onlyNeutral:tooltip(baseLink)
-equal(onlyNeutral.env.GameTooltip.lines[2].right, "Unknown") -- Neutral observations never become tooltip prices.
+equal(onlyNeutral.env.GameTooltip.lines[2].right, "777c") -- Neutral observations never replace the native fallback.
+onlyNeutral.nativeMissing = true
+equal(onlyNeutral:tooltip(baseLink).lines[2].right, "Unknown") -- A Neutral-only observation cannot fill a missing Faction price.
 
 local olderPrices = {status = "saved", realm = "Older label", faction = "Horde", timestamp = 1793534400 - 86400, estimatedBytes = 1024,
     variants = {{itemString = "item:13463"}, {itemString = "item:13463:0:0:0:0:0:-18"}},
@@ -517,12 +527,25 @@ sparse:command("scan"); sparse:event("REPLICATE_ITEM_LIST_UPDATE"); sparse:advan
 equal(sparse:tooltip(baseLink).lines[2].right, "3000c")
 equal(sparse:tooltip(variantLink).lines[2].right, "500c"); equal(sparse.lastAge, 1) -- Missing items keep their own observation age.
 
+local pendingNewer = harness({version = 1, scans = {olderPrices}})
+pendingNewer:advance(0.1)
+tip = pendingNewer:tooltip(baseLink)
+equal(tip.lines[2].right, "10c"); equal(pendingNewer.lastAge, 1)
+local pendingScan = {status = "saved", realm = "Test", faction = "Faction", timestamp = 1793534400,
+    variants = {{itemString = "item:13463"}}, rows = {}}
+for n = 1, 3000 do pendingScan.rows[n] = "1;1;2000;0;0;4" end
+pendingNewer.env.AuctionLedgerDB.scans[2] = pendingScan
+pendingNewer.ald.RefreshPrices(); pendingNewer:advance(0.05)
+equal(tip.lines[2].right, "10c"); equal(pendingNewer.lastAge, 1) -- Ready stale ALD prices remain usable during a newer index.
+pendingNewer:advance(0.2)
+equal(tip.lines[2].right, "2000c"); equal(pendingNewer.lastAge, 0)
+
 local bow = harness({version = 1, scans = {{status = "saved", realm = "Test label", faction = "Alliance", timestamp = 1793534400,
     estimatedBytes = 1024, variants = {{itemString = "item:4087:0:0:0:0:0:0:0:0:0:0:0:1:12728"}},
     rows = {"1;1;38799;0;0;4"}}}})
 bow.nativePrice = 30000
 local agilityLink = "|Hitem:4087::::::::44:1486:::1:12728::::::|h[Trueshot Bow of Agility]|h"
-tip = bow:tooltip(agilityLink); equal(tip.lines[2].right, "Unknown") -- Hide the old 3g native value while indexing.
+tip = bow:tooltip(agilityLink); equal(tip.lines[2].right, "30000c") -- Retain the old native value until ALD finishes indexing.
 bow:advance(0.1); equal(tip.lines[2].right, "38799c") -- Bag links match saved bonus-based Agility variants.
 bow.rows = {{itemID = 4087, link = agilityLink, count = 1, buyout = 38699}, {pending = true}}
 bow:command("scan"); bow:event("REPLICATE_ITEM_LIST_UPDATE"); bow:advance(1); bow:command("save")
@@ -539,7 +562,7 @@ login.env.UnitFactionGroup = function() return "Alliance" end
 login:event("PLAYER_LOGIN"); login:advance(0.1)
 equal(tip.lines[2].right, "1000c")
 login.env.issecretvalue = function(value) return value == baseLink end
-tip:RebuildFromTooltipInfo(); equal(tip.lines[2].right, "Unknown")
+tip:RebuildFromTooltipInfo(); equal(tip.lines[2].right, "777c") -- Protected links are left to the native renderer.
 
 local variants = harness()
 variants.rows = {{}, {link = variantLink, buyout = 10000}}
