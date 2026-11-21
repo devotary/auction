@@ -19,7 +19,7 @@ pub struct Item {
     pub category: String,
     pub quality: u8,
     pub min_buyout: u64,
-    pub median_buyout: u64,
+    pub median_buyout: Option<u64>,
     pub quantity: Option<u64>,
     pub listings: Option<u64>,
 }
@@ -35,6 +35,8 @@ pub struct Snapshot {
     pub source: String,
     pub timestamp: String,
     pub coverage: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture: Option<Capture>,
     pub items: Vec<Item>,
@@ -69,6 +71,9 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 pub(crate) fn metadata(s: &Snapshot) -> Value {
     let mut value = json!({"realm":s.realm,"faction":s.faction,"source":s.source,"timestamp":s.timestamp,"coverage":s.coverage,"itemCount":s.items.len()});
+    if let Some(detail) = &s.detail {
+        value["detail"] = json!(detail);
+    }
     if let Some(capture) = &s.capture {
         value["capture"] = json!(capture);
     }
@@ -394,7 +399,7 @@ mod tests {
                 } else {
                     100
                 },
-                median_buyout: 100,
+                median_buyout: Some(100),
                 quantity: None,
                 listings: None,
             };
@@ -404,6 +409,7 @@ mod tests {
                 source: "CSV".into(),
                 timestamp: n.to_string(),
                 coverage: "partial".into(),
+                detail: None,
                 capture: None,
                 items: vec![item],
             });
@@ -427,6 +433,7 @@ mod tests {
             source: "Auctioneer".into(),
             timestamp: date.into(),
             coverage: "partial".into(),
+            detail: None,
             capture: None,
             items: prices
                 .iter()
@@ -438,7 +445,7 @@ mod tests {
                     category: "Other".into(),
                     quality: 1,
                     min_buyout: *price,
-                    median_buyout: *price,
+                    median_buyout: Some(*price),
                     quantity: *quantity,
                     listings: None,
                 })

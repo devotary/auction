@@ -115,10 +115,11 @@ async function render() {
   $$('[data-days]').forEach(el => el.setAttribute('aria-pressed', String(Number(el.dataset.days) === state.days)));
   $('#watch-count').textContent = favorites.size;
   $('#data-notice').innerHTML = `<p><strong>${count(state.report.snapshots.length)} saved scans.</strong> Latest observation: ${escape(fullDate(state.report.asOf))}.</p>`;
+  if (a.latest.detail === 'summary') $('#data-notice').innerHTML += '<p>Price and quantity summary. Auction counts and weighted median prices are unavailable. Grouped summaries compare with other summaries; detailed listing history is kept separately.</p>';
   $('#stat-items').textContent = count(a.items.length);
   const knownSupplyCount = a.summary.knownSupplyCount;
   $('#stat-supply').textContent = knownSupplyCount ? count(a.summary.listedSupply) : 'Unknown';
-  $('#stat-supply-note').textContent = knownSupplyCount ? `${count(knownSupplyCount)} observed item types · buyout listings${a.latest.source === 'Auction Ledger' ? ' · partial capture' : ''}` : 'This source has no supply counts';
+  $('#stat-supply-note').textContent = knownSupplyCount ? `${count(knownSupplyCount)} observed item types · ${a.latest.detail === 'summary' ? 'browse quantities' : 'buyout listings'}${a.latest.source === 'Auction Ledger' ? ' · partial capture' : ''}` : 'This source has no supply counts';
   $('#stat-date').textContent = a.latest ? shortDate(a.latest.timestamp) : 'No scans';
   $('#stat-date-label').textContent = a.latest?.source === 'Auctionator daily lows' ? 'Latest day bucket' : a.latest?.source === 'Auctionator cache' ? 'Cache captured' : 'Latest observation';
   $('#stat-date-note').textContent = a.latest ? `${new Date(a.latest.timestamp).toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})} · ${a.latest.source}` : 'Scan to begin';
@@ -143,12 +144,13 @@ function renderLedger() {
   $('#activity-note').hidden = !moving;
   $('#ledger-table').classList.toggle('movement-table', moving);
   $('#ledger-head').innerHTML = moving ? '<tr><th class="watch-column"><span class="sr-only">Watch</span></th><th><button data-sort="name">Item ↕</button></th><th class="number"><button data-sort="unitsPerHour">Net units / h ↕</button></th><th class="number">Listed units</th><th class="number"><button data-sort="listingsPerHour">Net auctions / h ↕</button></th><th class="number"><button data-sort="minBuyout">Unit buyout ↕</button></th><th class="number"><button data-sort="percentPerHour">Net supply % / h ↕</button></th><th><span class="sr-only">Open item</span></th></tr>' : ledgerHead;
+  if (state.analysis.latest.detail === 'summary') $('#ledger-head [data-sort="minBuyout"]').textContent = 'AH minimum ↕';
   if (moving) {
     $('#activity-direction').value = state.activityDirection;
     $('#activity-sort').value = state.sort;
     $('#activity-scans').innerHTML = [['Previous scan', activity?.previous], ['Latest scan', activity?.latest]].map(([label, scan]) => {
       const capture = scan?.capture;
-      const detail = capture ? `${count(capture.captured)} / ${count(capture.received)} returned rows captured` : scan ? 'Capture count unavailable' : 'Save and publish a second scan of this AH';
+      const detail = scan?.detail === 'summary' ? `${count(scan.itemCount)} item groups · price and quantity summary` : capture ? `${count(capture.captured)} / ${count(capture.received)} returned rows captured` : scan ? 'Capture count unavailable' : 'Save and publish a second scan of this AH';
       return `<div><p>${label}</p><strong>${scan ? escape(fullDate(scan.timestamp)) : 'Not available'}</strong><small>${escape(detail)}${scan ? ` · ${escape(scan.coverage)} market coverage` : ''}</small></div>`;
     }).join('');
   }
@@ -176,11 +178,11 @@ function renderLedger() {
     b.closest('th').setAttribute('aria-sort', b.dataset.sort === state.sort ? state.descending ? 'descending' : 'ascending' : 'none');
   });
   $('#ranking-explainer').textContent = {
-    all: 'Cheapest observed unit buyouts. Open an item for its history and resale calculator.',
+    all: state.analysis.latest.detail === 'summary' ? 'Minimum prices from the AH browse summary. Open an item for its history and resale calculator.' : 'Cheapest observed unit buyouts. Open an item for its history and resale calculator.',
     movers: 'Largest absolute changes vs the reference scan. New items without a reference are excluded.',
     supply: 'Most units listed in the latest snapshot. Listed volume is availability, not confirmed sales.',
     spread: 'Median observed minimum buyout × 95% − current minimum buyout. Per unit; excludes lost deposits. Not guaranteed profit.',
-    activity: `${state.analysis.latest.faction} AH · net buyout supply changes between the latest two scans · ${interval(activity?.hours)} · ${count(activity?.matchedItems ?? 0)} matched item variants. Price-history period does not change this interval.`,
+    activity: `${state.analysis.latest.faction} AH · net ${state.analysis.latest.detail === 'summary' ? 'listed' : 'buyout'} supply changes between the latest two scans · ${interval(activity?.hours)} · ${count(activity?.matchedItems ?? 0)} matched item variants. Price-history period does not change this interval.`,
   }[state.rank];
   $('#ledger-body').innerHTML = visible.map(i => `<tr><td><button class="watch-button" data-watch="${escape(i.key)}" aria-pressed="${isWatched(i)}" aria-label="${isWatched(i) ? 'Unwatch' : 'Watch'} ${escape(i.name)}">${isWatched(i) ? '★' : '☆'}</button></td><td><button class="item-button" data-item="${escape(i.key)}">${icon(i)}<span><span class="item-name">${escape(i.name)}</span><span class="item-meta">${escape(i.category)} · #${i.itemId}</span></span></button></td>${moving ? `<td class="number activity-rate" data-label="Net units / hour">${net(i.activity.unitsPerHour)}<small>${net(i.activity.unitChange)} units between scans</small></td><td class="number" data-label="Listed units">${count(i.activity.quantityBefore)} → ${count(i.activity.quantityAfter)}</td><td class="number" data-label="Net auctions / hour">${net(i.activity.listingsPerHour)}<small>${i.activity.listingChange == null ? 'Auction counts unknown' : `${net(i.activity.listingChange)} auctions between scans`}</small></td><td class="number" data-label="Unit buyout">${money(i.minBuyout)}</td><td class="number" data-label="Net supply % / hour">${net(i.activity.percentPerHour)}${i.activity.percentPerHour == null ? '' : '%'}</td>` : `<td class="number">${money(i.minBuyout)}</td><td class="number">${percent(i.change)}</td><td class="number supply">${count(i.quantity)}</td><td class="number ${i.spread > 0 ? 'positive' : 'unknown'}">${i.history.length > 1 ? money(i.spread) : '—'}</td><td class="number">${sparkline(i.history)}</td>`}<td><button class="row-open" data-item="${escape(i.key)}" aria-label="View ${escape(i.name)} details">↗</button></td></tr>`).join('');
   $('#ledger-empty').hidden = items.length > 0;
@@ -201,6 +203,7 @@ function renderFlips() {
   if (!report) return;
   const pair = report.pairs[0];
   $('#data-notice').textContent = 'Buy on one Auction House, resell on the other. These are saved observations, not live offers or confirmed sales.';
+  if ([pair?.factionScan, pair?.neutralScan].some(scan => scan?.detail === 'summary')) $('#data-notice').textContent += ' Summary scans compare the same item group across houses. Rescan both houses in summary mode if one still has detailed listing data.';
   $('#flip-fees').textContent = `Assumed sale fees: Faction ${report.fees.factionPercent}% · Neutral ${report.fees.neutralPercent}%`;
   $('#flip-scans').innerHTML = [['Faction', pair?.factionScan],['Neutral', pair?.neutralScan]].map(([house, scan]) => `<div><p>${house} AH</p><strong>${scan ? escape(fullDate(scan.timestamp)) : 'Not scanned'}</strong><small>${scan ? `${count(scan.itemCount)} item variants · ${escape(scan.coverage)} capture` : 'Open this AH and save a scan'}</small></div>`).join('');
   const dates = [pair?.factionScan, pair?.neutralScan].map(scan => Date.parse(scan?.timestamp));
@@ -261,7 +264,7 @@ function openItem(key) {
   if (!i) return;
   state.current = i;
   $('#item-identity').innerHTML = `<div class="item-identity">${icon(i)}<div><h2 id="item-title">${escape(i.name)}</h2><p>${escape(state.analysis.latest.faction)} AH · #${i.itemId}</p></div></div>`;
-  $('#item-stats').innerHTML = `<div><p>Lowest unit buyout</p><strong>${money(i.minBuyout)}</strong></div><div><p>Change vs reference</p><strong>${percent(i.change)}</strong></div><div><p>Listed units</p><strong class="mono">${count(i.quantity)}</strong></div>`;
+  $('#item-stats').innerHTML = `<div><p>${state.analysis.latest.detail === 'summary' ? 'AH summary minimum' : 'Lowest unit buyout'}</p><strong>${money(i.minBuyout)}</strong></div><div><p>Change vs reference</p><strong>${percent(i.change)}</strong></div><div><p>Listed units</p><strong class="mono">${count(i.quantity)}</strong></div>`;
   $('#item-activity').hidden = !i.activity;
   $('#item-activity').textContent = i.activity ? `Latest supply movement: ${count(i.activity.quantityBefore)} → ${count(i.activity.quantityAfter)} units; ${net(i.activity.unitsPerHour)} units/hour. Scans ${interval(state.analysis.activity?.hours)}. Net auction count: ${net(i.activity.listingChange)}. This does not confirm sales.` : '';
   $('#item-chart').innerHTML = chart(i.history.map(h => ({timestamp:h.timestamp, value:h.price})), {price:true, id:'item-fill', label:`${i.name} minimum unit buyout history`});

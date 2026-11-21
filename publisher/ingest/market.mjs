@@ -67,7 +67,7 @@ export function sanitizeSnapshot(raw) {
       category: i.category === 'Other' && known ? known[2] : CATEGORIES.includes(i.category) ? i.category : known?.[2] || 'Other',
       quality: number(genericName && known ? known[3] : i.quality ?? known?.[3] ?? 1, {max: 8, integer: true}),
       minBuyout: number(i.minBuyout, {min: 1, integer: true}),
-      medianBuyout: number(i.medianBuyout ?? i.minBuyout, {min: 1, integer: true}),
+      medianBuyout: i.medianBuyout === null ? null : number(i.medianBuyout ?? i.minBuyout, {min: 1, integer: true}),
       quantity: number(i.quantity, {nullable: true, integer: true}),
       listings: number(i.listings, {nullable: true, integer: true}),
     };
@@ -80,6 +80,7 @@ export function sanitizeSnapshot(raw) {
     capture = {captured, received};
   }
   return {realm, faction, source: text(raw.source, 'JSON', 40), timestamp: isoDate(raw.timestamp),
+    ...(raw.source === 'Auction Ledger' && raw.detail === 'summary' ? {detail:'summary'} : {}),
     coverage: raw.coverage === 'full' ? 'full' : 'partial', ...(capture ? {capture} : {}), items};
 }
 export function mergeSnapshots(...groups) {

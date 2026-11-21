@@ -96,6 +96,35 @@ local function harness(previous)
             end
         end
     end
+    function h:enableBrowse(pages, synchronous)
+        local api = self.env.C_AuctionHouse
+        self.browsePages, self.browseRequests, self.browseMore = pages, 0, 0
+        self.browseReady, self.browseSnapshot, self.browseFull = true, {}, false
+        self.env.hooksecurefunc = function(target, method, hook)
+            local original = target[method]
+            target[method] = function(...)
+                original(...); hook(...)
+            end
+        end
+        function self:replyBrowse(page, event)
+            self.browseSnapshot = self.browsePages[page]
+            self.browseFull = page == #self.browsePages
+            self:event(event or "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED", self.browseSnapshot)
+        end
+        api.IsThrottledMessageSystemReady = function() return self.browseReady end
+        api.GetBrowseResults = function() return self.browseSnapshot end
+        api.HasFullBrowseResults = function() return self.browseFull end
+        api.GetItemKeyInfo = function(key) return {itemName = "Browse item " .. key.itemID, quality = 2} end
+        api.SendBrowseQuery = function(query)
+            equal(query.searchString, ""); equal(#query.sorts, 0)
+            self.browseRequests = self.browseRequests + 1
+            if synchronous then self:replyBrowse(1) end
+        end
+        api.RequestMoreBrowseResults = function()
+            assert(self.browseReady)
+            self.browseMore = self.browseMore + 1
+        end
+    end
     function h:tooltip(link, count)
         local tip = {lines = {}, data = {type = env.Enum.TooltipDataType.Item}, link = link, count = count or 1}
         function tip:GetItem() return "Dreamfoil", self.link end
@@ -581,6 +610,82 @@ equal(menu.creations.AuctionLedgerAHScanButton, 1)
 menu.env.Auctionator = nil; menu:event("PLAYER_LOGIN") -- Scanner stays usable without Auctionator; no own tooltip rows.
 equal(#menu:tooltip(baseLink).lines, 0)
 
+local function browseRow(id, quantity, price, suffix, level)
+    return {itemKey = {itemID = id, itemLevel = level or 0, itemSuffix = suffix or 0, battlePetSpeciesID = 0},
+        totalQuantity = quantity, minPrice = price, containsOwnerItem = true, owner = "PRIVATE_OWNER"}
+end
+local browsePages = {
+    {browseRow(13463, 40, 1100), browseRow(4087, 3, 50000, -18, 50)},
+    {browseRow(13463, 30, 1000), browseRow(4087, 3, 50000, -18, 50), browseRow(13466, 20, 800)},
+}
+local browse = harness(); browse:enableBrowse(browsePages)
+browse.browseSnapshot, browse.browseFull = {browseRow(13463, 9999, 1)}, true -- Stale pre-query cache must not be saved.
+browse:command("scan"); browse:advance(44)
+equal(browse.browseRequests, 0); equal(browse.requests, 1)
+browse:advance(2)
+equal(browse.browseRequests, 1); equal(#browse.env.AuctionLedgerDB.scans, 0)
+browse:advance(1); equal(browse.browseMore, 0) -- One outstanding request; do not loop over a stale full flag.
+browse:event("REPLICATE_ITEM_LIST_UPDATE"); browse:advance(0.1)
+equal(#browse.env.AuctionLedgerDB.scans, 0) -- A late full-list response cannot finish a browse scan.
+browse.browseReady = false
+browse:replyBrowse(1); browse:advance(0.2)
+equal(browse.browseMore, 0); equal(browse.frames.AuctionLedgerSaveButton.enabled, true)
+browse.browseReady = true; browse:advance(0.1); equal(browse.browseMore, 1)
+browse:advance(1); equal(browse.browseMore, 1)
+browse:replyBrowse(2, "AUCTION_HOUSE_BROWSE_RESULTS_ADDED"); browse:advance(0.1)
+local summary = browse.env.AuctionLedgerDB.scans[1]
+equal(summary.api, "browse"); equal(summary.captureComplete, true); equal(summary.captured, 3)
+equal(summary.rows[1], "1;30;1000") -- Cumulative pages upsert quantities and already-unit prices.
+equal(summary.rows[2], "2;3;50000")
+equal(summary.variants[2].browseKey.itemSuffix, -18); equal(summary.variants[2].browseKey.itemLevel, 50)
+equal(browse.frame.scripts.OnUpdate, nil)
+tip = browse:tooltip(baseLink, 9); equal(tip.lines[2].right, "1000c")
+browse.shift = true; tip:RebuildFromTooltipInfo(); equal(tip.lines[2].right, "9000c")
+browse.env.C_Item.GetDetailedItemLevelInfo = function() return 50 end
+local browseBow = "|Hitem:4087:0:0:0:0:0:-18:111:60:0|h[Bow]|h"
+equal(browse:tooltip(browseBow, 1).lines[2].right, "50000c")
+browse.env.C_Item.GetDetailedItemLevelInfo = function() return 51 end
+equal(browse:tooltip(browseBow, 1).lines[2].right, "777c") -- Never substitute a different level group.
+local summaryLogin = harness({version = 1, scans = {summary}})
+summaryLogin:advance(0.1); equal(summaryLogin:tooltip(baseLink).lines[2].right, "1000c") -- Reload indexing uses unit prices too.
+
+local synchronousBrowse = harness(); synchronousBrowse:enableBrowse({browsePages[2]}, true)
+synchronousBrowse:command("browse faction"); synchronousBrowse:advance(0.2)
+equal(synchronousBrowse.requests, 0); equal(synchronousBrowse.env.AuctionLedgerDB.scans[1].captured, 3)
+local neutralBrowse = harness(); neutralBrowse:enableBrowse({{browseRow(13463, 30, 500), browseRow(4087, 3, 50000, -18, 50), browseRow(13466, 20, 1600)}}, true)
+neutralBrowse:command("browse neutral"); neutralBrowse:advance(0.2)
+equal(neutralBrowse.env.AuctionLedgerDB.scans[1].faction, "Neutral")
+equal(neutralBrowse:tooltip(baseLink).lines[2].right, "777c")
+local missingReplicate = harness(); missingReplicate:enableBrowse({browsePages[2]}, true)
+missingReplicate.env.C_AuctionHouse.ReplicateItems = nil
+missingReplicate:command("scan"); missingReplicate:advance(0.2)
+equal(missingReplicate.env.AuctionLedgerDB.scans[1].api, "browse")
+local failedReplicate = harness(); failedReplicate:enableBrowse({browsePages[2]}, true); failedReplicate.fail = true
+failedReplicate:command("scan"); failedReplicate:advance(0.2)
+equal(failedReplicate.env.AuctionLedgerDB.scans[1].api, "browse")
+
+for _, mode in ipairs({"save", "timeout", "failure", "other-search", "cancel", "close"}) do
+    local h = harness({version = 1, scans = {old}}); h:enableBrowse(browsePages)
+    h:command("browse faction"); h:advance(0.1); h:replyBrowse(1); h:advance(0.1)
+    if mode == "save" then h:command("save")
+    elseif mode == "timeout" then h:advance(61)
+    elseif mode == "failure" then h:event("AUCTION_HOUSE_BROWSE_FAILURE")
+    elseif mode == "other-search" then h.env.C_AuctionHouse.SendBrowseQuery({searchString = "", sorts = {}})
+    elseif mode == "cancel" then h:command("cancel")
+    else h:event("AUCTION_HOUSE_CLOSED") end
+    equal(h.env.AuctionLedgerDB.scans[1], old)
+    equal(#h.env.AuctionLedgerDB.scans, (mode == "cancel" or mode == "close") and 1 or 2)
+    if #h.env.AuctionLedgerDB.scans == 2 then
+        equal(h.env.AuctionLedgerDB.scans[2].captured, 2)
+        equal(h.env.AuctionLedgerDB.scans[2].captureComplete, false)
+    end
+    equal(h.frame.scripts.OnUpdate, nil)
+end
+local emptyBrowse = harness({version = 1, scans = {old}}); emptyBrowse:enableBrowse({{}})
+emptyBrowse:command("browse"); emptyBrowse:advance(61)
+equal(#emptyBrowse.env.AuctionLedgerDB.scans, 1); equal(emptyBrowse.env.AuctionLedgerDB.scans[1], old)
+equal(emptyBrowse.frame.scripts.OnUpdate, nil)
+
 local function literal(value)
     if type(value) == "string" then return string.format("%q", value) end
     if type(value) == "number" or type(value) == "boolean" then return tostring(value) end
@@ -602,6 +707,13 @@ end
 if arg[4] then
     local file = assert(io.open(arg[4], "wb"))
     file:write("AuctionLedgerDB = " .. literal({version = 1, scans = {fullScan}})); file:close()
+end
+if arg[5] then
+    local previousSummary = harness(); previousSummary:enableBrowse(browsePages)
+    previousSummary:command("browse faction"); previousSummary:advance(0.1)
+    previousSummary:replyBrowse(1); previousSummary:advance(0.1); previousSummary:command("save")
+    local file = assert(io.open(arg[5], "wb"))
+    file:write("AuctionLedgerDB = " .. literal({version = 1, scans = {previousSummary.env.AuctionLedgerDB.scans[1], summary, neutralBrowse.env.AuctionLedgerDB.scans[1]}})); file:close()
 end
 print("PASS: streaming, large scans, storage/time partial saves, bounded item-data retries, stop-and-save, house detection, cross-house retention, native Auctionator pricing and stack/vendor totals, exact variants, bounded indexing, immediate updates, AH Scan button, cancellation and private fields")
 return harness

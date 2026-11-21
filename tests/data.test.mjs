@@ -165,3 +165,16 @@ test('capture diagnostics retain only validated aggregate counts and remain opti
   assert.doesNotMatch(JSON.stringify(safe),/PRIVATE|account|seller/);
   for(const capture of [{captured:101,received:100},{captured:1.5,received:2},{captured:500001,received:500001},{captured:0,received:0}])assert.throws(()=>sanitizeSnapshot({...raw,capture}));
 });
+
+test('browse summaries preserve group identity and never invent listing counts or weighted medians',()=>{
+  const source=`AuctionLedgerDB={version=1,scans={{status="saved",api="browse",realm="Test",faction="Alliance",startedAt=1793534400,timestamp=1793534500,captured=2,received=2,
+    variants={{itemId=4087,browseKey={itemID=4087,itemLevel=50,itemSuffix=-18,battlePetSpeciesID=0},name="Bow"},
+              {itemId=4087,browseKey={itemID=4087,itemLevel=51,itemSuffix=-18,battlePetSpeciesID=0},name="Bow"}},
+    rows={"1;9;1000","2;1;2000"}}}}`;
+  const [s]=importText(source,'AuctionLedger.lua');
+  assert.equal(s.detail,'summary');assert.equal(s.items[0].minBuyout,1000);assert.equal(s.items[0].quantity,9);
+  assert.equal(s.items[0].listings,null);assert.equal(s.items[0].medianBuyout,null);
+  assert.notEqual(s.items[0].key,s.items[1].key);assert.equal(Object.hasOwn(s,'capture'),false);
+  assert.equal(mergeSnapshots([s])[0].items[0].medianBuyout,null);
+  for(const [before,after]of [['itemID=4087','itemID=999'],['itemLevel=50','itemLevel=-1'],['itemSuffix=-18','itemSuffix=1.5'],['1;9;1000','1;-9;1000'],['1;9;1000','1;9;1.5'],['2;1;2000','1;1;2000']])assert.throws(()=>importText(source.replace(before,after),'AuctionLedger.lua'));
+});

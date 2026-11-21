@@ -1,4 +1,4 @@
--- One user-triggered replicate request; no trading, libraries or background scans.
+-- User-triggered, read-only snapshots; no trading or background scans.
 local _, ALD = ...
 local WAIT, RESOLVE, QUIET, COOLDOWN = 900, 90, 15, 900
 -- Conservative storage estimates; keep headroom below the desktop importer's 64 MiB input limit.
@@ -7,6 +7,7 @@ local events = CreateFrame("Frame", "AuctionLedgerEvents")
 local job, window, label, scanButton, neutralButton, autoButton, saveButton, cancelButton
 local auctionOpen = false
 local elapsedSincePoll = 0
+local issuingBrowse, browseHooksInstalled = false, false
 
 local function say(message)
     print("|cffffd100Auction Ledger:|r " .. message)
@@ -77,6 +78,16 @@ local function variant(link)
 end
 ALD.Variant = variant
 
+function ALD.BrowseKey(key)
+    if type(key) ~= "table" then return nil end
+    local fields = {key.itemID, key.itemLevel or 0, key.itemSuffix or 0, key.battlePetSpeciesID or 0}
+    for i, value in ipairs(fields) do
+        if type(value) ~= "number" or value % 1 ~= 0 or math.abs(value) > 1e9 or (i ~= 3 and value < 0) then return nil end
+    end
+    if not fields[1] or fields[1] < 1 then return nil end
+    return ("browse:%d:%d:%d:%d"):format(unpack(fields))
+end
+
 local function finish(reason, save)
     local current = job
     if not current then return end
@@ -91,8 +102,8 @@ local function finish(reason, save)
         local scan = {
             status = "saved", startedAt = current.startedAt, timestamp = time(),
             realm = GetRealmName(), faction = current.faction, coverage = "partial",
-            captureComplete = #current.rows == current.total,
-            api = "replicate", gameVersion = version, build = build, interface = interface,
+            captureComplete = #current.rows == current.total and (current.api ~= "browse" or current.browseComplete == true),
+            api = current.api, gameVersion = version, build = build, interface = interface,
             reason = reason, received = current.total, captured = #current.rows,
             unresolved = current.total - #current.rows,
             unread = math.max(0, current.total - current.nextRow),
@@ -121,7 +132,7 @@ local function finish(reason, save)
         end
         if ALD.RefreshPrices then ALD.RefreshPrices(scan, current.prices) end
         if autoButton then if detectHouse() then autoButton:Enable() else autoButton:Disable() end end
-        local message = ("%s AH: %s\nSaved %d / %d returned rows (%d unresolved).\n%s\nUse /reload, then run the desktop publisher."):format(ALD.House(scan.faction), scan.captureComplete and "Capture complete." or "Partial capture saved.", #scan.rows, scan.received, scan.unresolved, reason)
+        local message = ("%s AH: %s\nSaved %d / %d returned %s (%d unresolved).\n%s\nUse /reload, then run the desktop publisher."):format(ALD.House(scan.faction), scan.captureComplete and "Capture complete." or "Partial capture saved.", #scan.rows, scan.received, scan.api == "browse" and "item groups" or "rows", scan.unresolved, reason)
         status(message); say(message:gsub("\n", " "))
     else
         status(reason .. "\nPrevious scans kept.")
@@ -135,10 +146,100 @@ local function stopAndSave()
         say("No rows captured yet. The scan is still running; Cancel discards it.")
         return
     end
+    if job.api == "browse" then finish("Browse summary saved by user; prices and quantities only", true); return end
     local total = C_AuctionHouse.GetNumReplicateItems() or 0
     if total < job.total then finish("The replicate list changed during capture; scan again later.", false); return end
     job.total = total
     finish(#job.rows == total and "All returned rows captured; saved by user" or "Stopped early by user", true)
+end
+
+local function browseAvailable()
+    local api = C_AuctionHouse
+    return api and api.SendBrowseQuery and api.GetBrowseResults and api.HasFullBrowseResults
+        and api.RequestMoreBrowseResults and api.IsThrottledMessageSystemReady
+end
+
+local function beginBrowse()
+    job.api, job.browseBegan, job.browseLastResponse = "browse", GetTime(), GetTime()
+    job.browseWaiting, job.browseSent, job.browseIndex = false, false, 1
+    if not browseHooksInstalled and hooksecurefunc then
+        browseHooksInstalled = true
+        for _, method in ipairs({"SendBrowseQuery", "SearchForFavorites", "SearchForItemKeys", "SendSearchQuery", "SendSellSearchQuery"}) do
+            if type(C_AuctionHouse[method]) == "function" then
+                hooksecurefunc(C_AuctionHouse, method, function()
+                    if job and job.api == "browse" and not issuingBrowse then
+                        finish("Another auction search interrupted the browse scan; captured item groups kept", #job.rows > 0)
+                    end
+                end)
+            end
+        end
+    end
+    status(ALD.House(job.faction) .. " AH: starting browse summary…\nPrices and listed quantities; no auction counts or median.\nKeep the AH open and leave other searches idle.")
+end
+
+local function browseStep(now)
+    local api = C_AuctionHouse
+    if now - job.browseLastResponse > 60 or now - job.browseBegan > WAIT then
+        finish("Browse response timed out; captured item groups kept", #job.rows > 0); return
+    end
+    if job.browseResults then
+        local began = debugprofilestop and debugprofilestop() or 0
+        for _ = 1, 400 do
+            local result = job.browseResults[job.browseIndex]
+            if not result then break end
+            job.browseIndex = job.browseIndex + 1
+            local key = ALD.BrowseKey(result.itemKey)
+            local quantity, price = result.totalQuantity, result.minPrice
+            if key and type(quantity) == "number" and quantity >= 0 and quantity <= 1e9 and quantity % 1 == 0
+                and type(price) == "number" and price >= 0 and price <= 1e14 and price % 1 == 0 then
+                local id = job.byVariant[key]
+                if not id and quantity > 0 and price > 0 then
+                    id = #job.variants + 1; job.byVariant[key] = id
+                    local source = result.itemKey
+                    local info = api.GetItemKeyInfo and api.GetItemKeyInfo(source)
+                    local itemClass
+                    local instant = C_Item and C_Item.GetItemInfoInstant or GetItemInfoInstant
+                    if instant then local _, _, _, _, _, classID = instant(source.itemID); itemClass = classID end
+                    job.variants[id] = {itemId = source.itemID, name = info and info.itemName,
+                        quality = info and info.quality, classID = itemClass,
+                        browseKey = {itemID = source.itemID, itemLevel = source.itemLevel or 0,
+                            itemSuffix = source.itemSuffix or 0, battlePetSpeciesID = source.battlePetSpeciesID or 0}}
+                    job.bytes = job.bytes + #key + #(info and info.itemName or "") + 1024
+                end
+                if id then
+                    -- Each row is a group observation, not a made-up auction or stack.
+                    job.rows[id] = ("%d;%d;%.0f"):format(id, quantity, price)
+                    job.total = math.max(job.total, #job.rows)
+                    job.prices[key] = quantity > 0 and price > 0 and price or nil
+                    if saveButton then saveButton:Enable() end
+                end
+            end
+            if #job.rows >= 100000 or job.bytes > MAX_BYTES then
+                finish("Browse storage budget reached; captured item groups kept", #job.rows > 0); return
+            end
+            if debugprofilestop and debugprofilestop() - began > 3 then break end
+        end
+        if job.browseIndex > #job.browseResults then
+            job.browseResults = nil
+            if api.HasFullBrowseResults() then
+                job.browseComplete = true
+                finish("Browse summary complete; prices and quantities only", #job.rows > 0); return
+            end
+        end
+    end
+    if not job.browseResults and not job.browseWaiting and api.IsThrottledMessageSystemReady() then
+        job.browseWaiting = true
+        local first = not job.browseSent
+        job.browseSent = true
+        issuingBrowse = true
+        local ok, message
+        if first then ok, message = pcall(api.SendBrowseQuery, {searchString = "", sorts = {}, filters = {}, itemClassFilters = {}})
+        else ok, message = pcall(api.RequestMoreBrowseResults) end
+        issuingBrowse = false
+        if not job then return end
+        if not ok then finish("Browse request failed: " .. tostring(message), #job.rows > 0); return end
+    end
+    status(("%s AH: browse summary, %d item groups captured\nElapsed: %ds · waiting for %s\nPrices and quantities only. Stop and Save keeps captured data."):format(ALD.House(job.faction), #job.rows, math.floor(now - job.browseBegan), job.browseResults and "cataloging" or "the next page"))
 end
 
 local function pendingRow(index, reason, itemID)
@@ -203,7 +304,12 @@ local function step()
     local now = GetTime()
     local id = auctioneerID()
     if id and job.auctioneer and id ~= job.auctioneer then finish("Auctioneer changed during capture", false); return end
+    if job.api == "browse" then browseStep(now); return end
     if not job.gotEvent then
+        if now - job.began >= 45 and browseAvailable() then
+            say("No full-list response. Switching to a browse summary of prices and quantities.")
+            beginBrowse(); return
+        end
         if now - job.began > WAIT then finish("No replicate response. The server may be on its full-scan cooldown.", false) end
         return
     end
@@ -271,11 +377,12 @@ local function step()
     end
 end
 
-local function start(mode)
+local function start(mode, browse)
     if job then say("A scan is already running."); return end
     if not auctionOpen then say("Open the Auction House first."); return end
     local api = C_AuctionHouse
-    if not api or not api.ReplicateItems or not api.GetNumReplicateItems or not api.GetReplicateItemInfo or not api.GetReplicateItemLink then
+    local replicate = api and api.ReplicateItems and api.GetNumReplicateItems and api.GetReplicateItemInfo and api.GetReplicateItemLink
+    if not replicate and not browseAvailable() then
         say("This client does not expose the required replicate API."); return
     end
     local db = database()
@@ -287,11 +394,14 @@ local function start(mode)
     if faction ~= "Alliance" and faction ~= "Horde" and faction ~= "Neutral" then
         say("House not detected. Choose Scan Faction AH or Scan Neutral AH; a saved manual scan teaches this auctioneer."); return
     end
-    local remaining = COOLDOWN - (time() - (db.lastResponseAt or 0))
-    if remaining > 0 then say(("Full-scan cooldown: about %d more seconds."):format(remaining)); return end
+    local remaining = COOLDOWN - (time() - math.max(db.lastResponseAt or 0, db.lastRequestAt or 0))
+    browse = browse or not replicate or remaining > 0
+    if browse and not browseAvailable() then
+        say(remaining > 0 and ("Full-scan cooldown: about %d more seconds."):format(remaining) or "This client does not expose the browse API."); return
+    end
     local now = GetTime()
     job = {startedAt = time(), began = now, faction = faction, auctioneer = auctioneerID(), manual = mode,
-        gotEvent = false, lastGrowth = now,
+        api = "replicate", gotEvent = false, lastGrowth = now,
         total = 0, nextRow = 0, cursor = 1, urgentCursor = 1, nextPass = 0, bytes = 1024,
         queue = {}, retry = {}, urgent = {}, urgentQueued = {}, pending = {}, byItem = {},
         pendingCounts = {item = 0, details = 0}, attempts = {},
@@ -300,7 +410,6 @@ local function start(mode)
     if scanButton then scanButton:Disable(); neutralButton:Disable(); autoButton:Disable(); saveButton:Disable(); saveButton:SetText("Stop and Save"); cancelButton:Enable() end
     status(faction .. " AH: waiting for the server's auction list…\nThis can take several minutes. Keep the AH open.")
     say(faction .. " AH scan requested. This reads the currently open AH; make sure you chose the matching house.")
-    if ALD.RefreshAuctionator then ALD.RefreshAuctionator() end
     events:SetScript("OnUpdate", function(_, elapsed)
         elapsedSincePoll = elapsedSincePoll + elapsed
         if elapsedSincePoll < 0.05 then return end
@@ -308,8 +417,11 @@ local function start(mode)
         local ok, message = pcall(step)
         if not ok then finish("Capture error: " .. tostring(message), false) end
     end)
+    if browse then beginBrowse(); return end
     local ok, message = pcall(api.ReplicateItems)
-    if not ok then finish("Request failed: " .. tostring(message), false) end
+    if ok then db.lastRequestAt = time()
+    elseif browseAvailable() then beginBrowse()
+    else finish("Request failed: " .. tostring(message), false) end
 end
 
 local function showWindow()
@@ -357,6 +469,10 @@ events:RegisterEvent("PLAYER_LOGIN")
 events:RegisterEvent("AUCTION_HOUSE_SHOW")
 events:RegisterEvent("AUCTION_HOUSE_CLOSED")
 events:RegisterEvent("REPLICATE_ITEM_LIST_UPDATE")
+events:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_UPDATED")
+events:RegisterEvent("AUCTION_HOUSE_BROWSE_RESULTS_ADDED")
+events:RegisterEvent("AUCTION_HOUSE_BROWSE_FAILURE")
+events:RegisterEvent("AUCTION_HOUSE_DISABLED")
 pcall(events.RegisterEvent, events, "ITEM_DATA_LOAD_RESULT")
 events:SetScript("OnEvent", function(_, event, name, success)
     if event == "ADDON_LOADED" then
@@ -366,6 +482,7 @@ events:SetScript("OnEvent", function(_, event, name, success)
     elseif event == "PLAYER_LOGIN" then addScanButton(); if ALD.RefreshPrices then ALD.RefreshPrices() end
     elseif event == "AUCTION_HOUSE_SHOW" then
         auctionOpen = true; addScanButton(); readyWindow(); if ALD.RefreshAuctionator then ALD.RefreshAuctionator() end
+    elseif event == "AUCTION_HOUSE_DISABLED" then finish("Auction House disabled during capture", false)
     elseif event == "AUCTION_HOUSE_CLOSED" then
         auctionOpen = false; finish("Auction House closed during capture", false); readyWindow(); if ALD.RefreshAuctionator then ALD.RefreshAuctionator() end
     elseif event == "ITEM_DATA_LOAD_RESULT" and job and type(name) == "number" then
@@ -377,7 +494,14 @@ events:SetScript("OnEvent", function(_, event, name, success)
                 end
             end
         end
-    elseif event == "REPLICATE_ITEM_LIST_UPDATE" and job then
+    elseif job and job.api == "browse" and event == "AUCTION_HOUSE_BROWSE_FAILURE" then
+        finish("Server rejected the browse query; captured item groups kept", #job.rows > 0)
+    elseif job and job.api == "browse" and job.browseSent
+        and (event == "AUCTION_HOUSE_BROWSE_RESULTS_UPDATED" or event == "AUCTION_HOUSE_BROWSE_RESULTS_ADDED") then
+        job.browseResults = C_AuctionHouse.GetBrowseResults()
+        job.total = math.max(job.total, #job.browseResults)
+        job.browseIndex, job.browseWaiting, job.browseLastResponse = 1, false, GetTime()
+    elseif event == "REPLICATE_ITEM_LIST_UPDATE" and job and job.api == "replicate" then
         if not job.gotEvent then
             local db = database()
             if db then db.lastResponseAt = time() end
@@ -391,6 +515,8 @@ SlashCmdList.AUCTIONLEDGER = function(command)
     local action = (command or ""):lower():match("^%s*(.-)%s*$")
     if action == "scan" or action == "scan faction" or action == "scan neutral" then
         showWindow(); start(action == "scan neutral" and "Neutral" or action == "scan faction" and "Faction" or nil)
+    elseif action == "browse" or action == "browse faction" or action == "browse neutral" then
+        showWindow(); start(action == "browse neutral" and "Neutral" or action == "browse faction" and "Faction" or nil, true)
     elseif action == "save" then stopAndSave()
     elseif action == "cancel" then finish("Cancelled", false)
     elseif action == "status" then

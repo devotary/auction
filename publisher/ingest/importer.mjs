@@ -165,12 +165,22 @@ function ledger(root) {
   const result=[];
   for (const scan of scans) {
     if (scan?.status !== 'saved') continue; // Interrupted work is never an observation.
+    if (scan.api != null && !['replicate','browse'].includes(scan.api)) throw new Error('Unsupported Auction Ledger scan API.');
+    const summary=scan.api==='browse';
     const variants=scan.variants,rawRows=values(scan.rows);
     if (!variants || typeof variants !== 'object' || rawRows.length>500000 || scan.captured!==rawRows.length || !Number.isInteger(scan.received) || scan.received<rawRows.length) throw new Error('Invalid Auction Ledger listing counts.');
     const timestamp=isoDate(scan.timestamp),startedAt=isoDate(scan.startedAt);
     if (Date.parse(startedAt)>Date.parse(timestamp)) throw new Error('Invalid Auction Ledger scan interval.');
     const metadata=new Map();
     for (const [index,m] of Object.entries(variants)) {
+      if (summary) {
+        const k=m?.browseKey,fields=k&&[k.itemID,k.itemLevel,k.itemSuffix,k.battlePetSpeciesID];
+        if (!/^\d+$/.test(index) || !m || !fields || !fields.every(Number.isSafeInteger)
+          || fields.some((v,i)=>Math.abs(v)>1e9 || (i!==2&&v<0)) || k.itemID<1 || m.itemId!==k.itemID) throw new Error('Invalid Auction Ledger browse identity.');
+        metadata.set(Number(index),{itemId:m.itemId,key:`${m.itemId}:b1:${k.itemLevel}:${k.itemSuffix}:${k.battlePetSpeciesID}`,name:utf8(m.name),quality:m.quality,
+          category:m.classID===7?'Trade goods':m.classID===0?'Consumables':[2,4].includes(m.classID)?'Equipment':m.classID===9?'Recipes':'Other'});
+        continue;
+      }
       if (!/^\d+$/.test(index) || !m || !Number.isInteger(m.itemId) || m.itemId<1 || m.itemId>1e9 || typeof m.itemString!=='string' || m.itemString.length>2048 || !/^item:\d+(?::[-\d]*)*$/.test(m.itemString)) throw new Error('Invalid Auction Ledger item variant.');
       const fields=m.itemString.split(':').map(field=>field===''?'0':field);
       if (Number(fields[1])!==m.itemId || fields.length>256 || fields.slice(1).some(field=>!Number.isSafeInteger(Number(field)))) throw new Error('Invalid Auction Ledger item identity.');
@@ -179,6 +189,18 @@ function ledger(root) {
       const key=fields.length===2 ? String(m.itemId) : `${m.itemId}:v1:${createHash('sha256').update(fields.join(':')).digest('hex')}`;
       metadata.set(Number(index),{itemId:m.itemId,key,name:utf8(m.name),quality:m.quality,
         category:m.classID===7?'Trade goods':m.classID===0?'Consumables':[2,4].includes(m.classID)?'Equipment':m.classID===9?'Recipes':'Other'});
+    }
+    if (summary) {
+      const seen=new Set();
+      const items=rawRows.map(row=>{
+        if (typeof row!=='string' || row.length>100 || !/^\d+;\d+;\d+$/.test(row)) throw new Error('Invalid Auction Ledger browse observation.');
+        const [variant,quantity,minBuyout]=row.split(';').map(Number);
+        if (![variant,quantity,minBuyout].every(Number.isSafeInteger) || quantity>1e9 || minBuyout>1e14 || !metadata.has(variant) || seen.has(variant)) throw new Error('Invalid Auction Ledger browse values.');
+        seen.add(variant);
+        return {...metadata.get(variant),quantity,minBuyout,medianBuyout:null,listings:null};
+      }).filter(i=>i.quantity>0&&i.minBuyout>0);
+      if (items.length) result.push(sanitizeSnapshot({realm:utf8(scan.realm),faction:scan.faction,source:'Auction Ledger',timestamp,coverage:'partial',detail:'summary',items}));
+      continue;
     }
     const rows=rawRows.map(row=>{
       if (typeof row!=='string' || row.length>200 || !/^\d+;\d+;\d+;\d+;\d+;\d+$/.test(row)) throw new Error('Invalid Auction Ledger compact listing.');

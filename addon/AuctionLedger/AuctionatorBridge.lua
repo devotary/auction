@@ -34,16 +34,16 @@ local function indexSavedRows()
         else
             task.index = task.index + 1
             if type(row) == "string" then
-                local id, count, buyout = row:match("^(%d+);(%d+);(%d+);")
+                local id, count, buyout = row:match("^(%d+);(%d+);(%d+)")
                 id, count, buyout = tonumber(id), tonumber(count), tonumber(buyout)
                 local key = id and task.keys[id]
                 if id and key == nil then
                     local meta = task.scan.variants[id]
-                    key = type(meta) == "table" and ALD.Variant(meta.itemString)
+                    key = type(meta) == "table" and (task.scan.api == "browse" and ALD.BrowseKey(meta.browseKey) or ALD.Variant(meta.itemString))
                     task.keys[id] = key or false
                 end
                 if key and count and count > 0 and buyout and buyout > 0 then
-                    task.prices[key] = math.min(task.prices[key] or math.huge, buyout / count)
+                    task.prices[key] = math.min(task.prices[key] or math.huge, task.scan.api == "browse" and buyout or buyout / count)
                 end
             end
         end
@@ -87,9 +87,24 @@ end
 local function observedPrice(link)
     if (issecretvalue and issecretvalue(link)) or type(link) ~= "string" then return end
     local key = ALD.Variant(link)
+    local browseKeys
     for _, entry in ipairs(cache) do
         if entry.ready and entry.scan.timestamp <= time() + 300 then
-            local price = key and entry.prices[key]
+            local price = entry.scan.api ~= "browse" and key and entry.prices[key]
+            if entry.scan.api == "browse" then
+                if not browseKeys then
+                    browseKeys = {}
+                    local fields = {}
+                    for field in ((key or "") .. ":"):gmatch("(.-):") do fields[#fields + 1] = field end
+                    local id, suffix = tonumber(fields[2]), tonumber(fields[8]) or 0
+                    local level
+                    if C_Item and C_Item.GetDetailedItemLevelInfo then level = C_Item.GetDetailedItemLevelInfo(link)
+                    elseif C_Item and C_Item.GetItemInfo then local _, _, _, itemLevel = C_Item.GetItemInfo(link); level = itemLevel end
+                    if level then browseKeys[#browseKeys + 1] = ALD.BrowseKey({itemID = id, itemLevel = level, itemSuffix = suffix}) end
+                    browseKeys[#browseKeys + 1] = ALD.BrowseKey({itemID = id, itemSuffix = suffix})
+                end
+                for _, browseKey in ipairs(browseKeys) do if entry.prices[browseKey] then price = entry.prices[browseKey]; break end end
+            end
             if price then
                 local epoch = Auctionator.Constants and Auctionator.Constants.SCAN_DAY_0 or 0
                 local age = math.max(0, math.floor((time() - epoch) / 86400) - math.floor((entry.scan.timestamp - epoch) / 86400))
